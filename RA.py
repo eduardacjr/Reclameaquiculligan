@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- CSS PERSONALIZADO (OTIMIZADO) ---
+# --- CSS PERSONALIZADO ---
 st.markdown("""
 <style>
     .block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
@@ -301,9 +301,11 @@ def main():
             st.markdown("---")
             st.markdown("### 1. Visão por Motivos (Drill-down)")
             
-            lista_motivos_raw = df_analise['Motivos Ecohouse'].unique().tolist()
+            # --- FIX: TRATAMENTO DE DADOS PARA EVITAR TYPEERROR NA ORDENAÇÃO ---
+            lista_motivos_raw = df_analise['Motivos Ecohouse'].dropna().astype(str).unique().tolist()
             if "NÃO INFORMADO" in lista_motivos_raw: lista_motivos_raw.remove("NÃO INFORMADO")
             motivos_list = ["Todos (Visão Geral)"] + sorted(lista_motivos_raw)
+            # -------------------------------------------------------------------
             
             filtro_motivo = st.selectbox("🎯 Selecione um motivo para ver quais Franquias são responsáveis:", options=motivos_list)
             
