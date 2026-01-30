@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- CSS PERSONALIZADO ---
+# --- CSS PERSONALIZADO (OTIMIZADO) ---
 st.markdown("""
 <style>
     .block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
@@ -284,57 +284,60 @@ def main():
             else: st.warning("Sem dados processáveis.")
         else: st.info("Sem dados no período.")
 
-    # --- ABA ANÁLISES DETALHADAS ---
+    # --- ABA ANÁLISES DETALHADAS (COM DRILL-DOWN) ---
     with tab_analises:
-        st.subheader("🧩 Análise por Motivos Ecohouse")
+        st.subheader("🧩 Análise Detalhada: Motivos & Franquias")
+        
         min_date = df['Data Reclamação'].min().date()
         max_date = df['Data Reclamação'].max().date()
         c_m1, c_m2 = st.columns(2)
-        dm_ini = c_m1.date_input("Início (Motivos)", min_date, key="dm_ini")
-        dm_fim = c_m2.date_input("Fim (Motivos)", max_date, key="dm_fim")
+        dm_ini = c_m1.date_input("Início (Análises)", min_date, key="dm_ini")
+        dm_fim = c_m2.date_input("Fim (Análises)", max_date, key="dm_fim")
+        
         mask_mot = (df['Data Reclamação'].dt.date >= dm_ini) & (df['Data Reclamação'].dt.date <= dm_fim)
-        df_mot = df.loc[mask_mot].copy()
+        df_analise = df.loc[mask_mot].copy()
 
-        if 'Motivos Ecohouse' in df_mot.columns:
-            gb = df_mot.groupby('Motivos Ecohouse').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
-            gb = gb[gb['Volume'] > 0] 
-            c1, c2 = st.columns([1, 1])
+        if 'Motivos Ecohouse' in df_analise.columns and 'Franquias' in df_analise.columns:
+            st.markdown("---")
+            st.markdown("### 1. Visão por Motivos (Drill-down)")
+            
+            lista_motivos_raw = df_analise['Motivos Ecohouse'].unique().tolist()
+            if "NÃO INFORMADO" in lista_motivos_raw: lista_motivos_raw.remove("NÃO INFORMADO")
+            motivos_list = ["Todos (Visão Geral)"] + sorted(lista_motivos_raw)
+            
+            filtro_motivo = st.selectbox("🎯 Selecione um motivo para ver quais Franquias são responsáveis:", options=motivos_list)
+            
+            c1, c2 = st.columns([1.3, 1])
             with c1:
-                motivos_list = ["Todos"] + list(gb['Motivos Ecohouse'].unique())
-                filtro_motivo = st.selectbox("🎯 Filtrar Tabela por Motivo Específico:", options=motivos_list)
-                gb_display = gb if filtro_motivo == "Todos" else gb[gb['Motivos Ecohouse'] == filtro_motivo]
-                st.dataframe(gb_display.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True, height=400)
-            with c2:
-                top_6 = gb.head(6)
-                fig = px.pie(top_6, values='Volume', names='Motivos Ecohouse', hole=0.4, color_discrete_sequence=px.colors.sequential.Blues_r)
-                fig.update_traces(textposition='outside', textinfo='percent+label')
-                fig.update_layout(showlegend=False, margin=dict(t=40, b=40, l=40, r=40))
-                st.plotly_chart(fig, use_container_width=True)
+                if filtro_motivo == "Todos (Visão Geral)":
+                    gb_motivos = df_analise.groupby('Motivos Ecohouse').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
+                    st.markdown("##### 📋 Ranking de Motivos (Geral)")
+                    st.dataframe(gb_motivos.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True, height=400)
+                    dados_grafico = gb_motivos.head(10)
+                    coluna_grafico = 'Motivos Ecohouse'
+                    titulo_grafico = "Top 10 Motivos (Volume)"
+                else:
+                    df_filtered = df_analise[df_analise['Motivos Ecohouse'] == filtro_motivo]
+                    gb_drilldown = df_filtered.groupby('Franquias').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
+                    st.markdown(f"##### 🏢 Franquias com reclamações de: **{filtro_motivo}**")
+                    st.dataframe(gb_drilldown.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Reds'), use_container_width=True, height=400)
+                    dados_grafico = gb_drilldown.head(10)
+                    coluna_grafico = 'Franquias'
+                    titulo_grafico = f"Top Franquias em: {filtro_motivo}"
 
-        st.markdown("---") 
-        st.subheader("store Performance por Franquias")
-        c_f1, c_f2 = st.columns(2)
-        df_ini = c_f1.date_input("Início (Franquias)", min_date, key="df_ini")
-        df_fim = c_f2.date_input("Fim (Franquias)", max_date, key="df_fim")
-        mask_fran = (df['Data Reclamação'].dt.date >= df_ini) & (df['Data Reclamação'].dt.date <= df_fim)
-        df_fran = df.loc[mask_fran].copy()
-        if 'Franquias' in df_fran.columns:
-            gb = df_fran.groupby('Franquias').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
-            gb = gb[gb['Volume'] > 0]
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                franquias_list = ["Todos"] + list(gb['Franquias'].unique())
-                filtro_franquia = st.selectbox("🎯 Filtrar Tabela por Franquia Específica:", options=franquias_list)
-                gb_display = gb if filtro_franquia == "Todos" else gb[gb['Franquias'] == filtro_franquia]
-                st.dataframe(gb_display.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True, height=400)
             with c2:
-                top_6 = gb.head(6)
-                fig = px.pie(top_6, values='Volume', names='Franquias', hole=0.4, color_discrete_sequence=px.colors.sequential.Blues_r)
-                fig.update_traces(textposition='outside', textinfo='percent+label')
-                fig.update_layout(showlegend=False, margin=dict(t=40, b=40, l=40, r=40))
-                st.plotly_chart(fig, use_container_width=True)
+                if not dados_grafico.empty:
+                    fig = px.pie(dados_grafico, values='Volume', names=coluna_grafico, hole=0.4, title=titulo_grafico, color_discrete_sequence=px.colors.sequential.Blues_r)
+                    fig.update_traces(textposition='outside', textinfo='percent+label')
+                    fig.update_layout(showlegend=False, margin=dict(t=40, b=40, l=40, r=40))
+                    st.plotly_chart(fig, use_container_width=True)
+                else: st.info("Sem dados para exibir gráfico.")
 
-    # --- ABA QUALITATIVA ---
+            st.markdown("---") 
+            st.markdown("### 2. Ranking Geral de Franquias (Volume Total)")
+            gb_fran_geral = df_analise.groupby('Franquias').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
+            st.dataframe(gb_fran_geral.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True)
+
     with tab_quali:
         st.subheader("🔍 Análise Qualitativa Detalhada")
         c_d1, c_d2 = st.columns(2)
