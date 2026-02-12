@@ -285,38 +285,41 @@ def main():
             else: st.warning("Sem dados processáveis.")
         else: st.info("Sem dados no período.")
 
-    # --- ABA ANÁLISE POR FRANQUIA (NOVA) ---
+    # --- ABA ANÁLISE POR FRANQUIA (MULTISELECT) ---
     with tab_franquias:
         st.subheader("🏢 Dossiê da Franquia")
-        st.markdown("Selecione uma franquia para ver o desempenho individual detalhado (como se estivesse abrindo a pasta dela).")
+        st.markdown("Selecione uma ou mais franquias. Se deixar vazio, mostrará a **Rede Completa**.")
         
-        # Filtro de Data Global para a Aba
         c_fd1, c_fd2 = st.columns(2)
         d_fran_ini = c_fd1.date_input("Início Período", df['Data Reclamação'].min().date(), key="dfi")
         d_fran_fim = c_fd2.date_input("Fim Período", df['Data Reclamação'].max().date(), key="dff")
         
-        # Filtra DF pelo tempo primeiro
         mask_fran_time = (df['Data Reclamação'].dt.date >= d_fran_ini) & (df['Data Reclamação'].dt.date <= d_fran_fim)
         df_fran_time = df.loc[mask_fran_time].copy()
         
-        # Lista de Franquias (Filtrada)
         if not df_fran_time.empty:
             lista_franquias = df_fran_time['Franquias'].dropna().astype(str).unique().tolist()
             if "NÃO INFORMADO" in lista_franquias: lista_franquias.remove("NÃO INFORMADO")
             lista_franquias.sort()
             
-            # Selectbox (A "Pastinha")
-            fran_selecionada = st.selectbox("📂 Selecione a Franquia:", lista_franquias)
+            # --- MUDANÇA: MULTISELECT ---
+            franquias_selecionadas = st.multiselect("📂 Selecione as Franquias:", lista_franquias)
             
-            # Filtra pela franquia
-            df_target = df_fran_time[df_fran_time['Franquias'] == fran_selecionada].copy()
+            # Lógica de Filtro
+            if not franquias_selecionadas:
+                df_target = df_fran_time.copy() # Vazio = Todas
+                titulo_painel = "Status: Rede Completa (Todas)"
+            else:
+                df_target = df_fran_time[df_fran_time['Franquias'].isin(franquias_selecionadas)].copy()
+                if len(franquias_selecionadas) == 1:
+                    titulo_painel = f"Status: {franquias_selecionadas[0]}"
+                else:
+                    titulo_painel = f"Status: {len(franquias_selecionadas)} Franquias Selecionadas"
             
             if not df_target.empty:
                 st.markdown("---")
-                # 1. Painel de KPIs (Reutilizando o padrão visual)
-                renderizar_painel_principal(df_target, f"Status: {fran_selecionada}")
+                renderizar_painel_principal(df_target, titulo_painel)
                 
-                # 2. Gráficos de Detalhe
                 c_g1, c_g2 = st.columns(2)
                 with c_g1:
                     st.markdown("##### 🚨 Principais Motivos")
@@ -334,11 +337,10 @@ def main():
                     fig_line = px.line(vol_tempo, x='Mes', y='Volume', markers=True, height=300)
                     st.plotly_chart(fig_line, use_container_width=True)
                 
-                # 3. Tabela de Casos daquela Franquia
-                st.markdown(f"##### 📋 Lista de Casos: {fran_selecionada}")
+                st.markdown(f"##### 📋 Lista de Casos")
                 st.dataframe(df_target, use_container_width=True)
             else:
-                st.warning("Sem dados para esta franquia no período selecionado.")
+                st.warning("Sem dados para esta seleção.")
         else:
             st.info("Sem dados no período selecionado.")
 
@@ -444,7 +446,7 @@ def main():
             ).reset_index().sort_values('Qtd_Casos', ascending=False)
             st.dataframe(gb_drill.style.background_gradient(subset=['Qtd_Casos'], cmap='Blues').format({'Nota_Media': '{:.2f}'}), use_container_width=True)
             
-            # --- NOVO: BOTÃO DE DOWNLOAD XLSX ---
+            # --- BOTÃO DE DOWNLOAD XLSX ---
             gb_drill_download = gb_drill.copy()
             if 'Nota_Media' in gb_drill_download.columns:
                 gb_drill_download['Nota_Media'] = gb_drill_download['Nota_Media'].round(2)
