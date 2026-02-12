@@ -301,11 +301,9 @@ def main():
             st.markdown("---")
             st.markdown("### 1. Visão por Motivos (Drill-down)")
             
-            # --- FIX: TRATAMENTO DE DADOS PARA EVITAR TYPEERROR NA ORDENAÇÃO ---
             lista_motivos_raw = df_analise['Motivos Ecohouse'].dropna().astype(str).unique().tolist()
             if "NÃO INFORMADO" in lista_motivos_raw: lista_motivos_raw.remove("NÃO INFORMADO")
             motivos_list = ["Todos (Visão Geral)"] + sorted(lista_motivos_raw)
-            # -------------------------------------------------------------------
             
             filtro_motivo = st.selectbox("🎯 Selecione um motivo para ver quais Franquias são responsáveis:", options=motivos_list)
             
@@ -387,6 +385,17 @@ def main():
                 Nota_Media=('Nota', 'mean')
             ).reset_index().sort_values('Qtd_Casos', ascending=False)
             st.dataframe(gb_drill.style.background_gradient(subset=['Qtd_Casos'], cmap='Blues').format({'Nota_Media': '{:.2f}'}), use_container_width=True)
+            
+            # --- NOVO: BOTÃO DE DOWNLOAD ---
+            csv = gb_drill.to_csv(index=False).encode('utf-8-sig') # utf-8-sig para acentos
+            st.download_button(
+                label="📥 Baixar Dados (CSV)",
+                data=csv,
+                file_name='detalhamento_cruzado.csv',
+                mime='text/csv',
+            )
+            # -------------------------------
+            
         else: st.info("Nenhum caso avaliado.")
 
     with tab_simulador:
