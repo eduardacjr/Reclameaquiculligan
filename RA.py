@@ -15,13 +15,28 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- CSS PERSONALIZADO ---
+# --- CSS PERSONALIZADO (SEM CABEÇALHO) ---
 st.markdown("""
 <style>
-    .block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
+    /* --- REMOVER CABEÇALHO PADRÃO DO STREAMLIT --- */
+    [data-testid="stHeader"] {
+        display: none;
+    }
+    [data-testid="stToolbar"] {
+        visibility: hidden;
+    }
+    
+    /* Ajuste para o conteúdo colar no topo */
+    .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
+    }
+    
+    /* Animação */
     @keyframes gradient-animation {
         0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; }
     }
+    
     .status-card {
         border-radius: 12px; padding: 8px; color: white; text-align: center; height: 110px;
         display: flex; flex-direction: column; justify-content: center; align-items: center;
@@ -302,7 +317,7 @@ def main():
             if "NÃO INFORMADO" in lista_franquias: lista_franquias.remove("NÃO INFORMADO")
             lista_franquias.sort()
             
-            # --- MUDANÇA: MULTISELECT ---
+            # MULTISELECT
             franquias_selecionadas = st.multiselect("📂 Selecione as Franquias:", lista_franquias)
             
             # Lógica de Filtro
