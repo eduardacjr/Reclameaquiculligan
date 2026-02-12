@@ -4,7 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import os
 import math
-import io # Necessário para criar o arquivo Excel na memória
+import io
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
@@ -246,8 +246,8 @@ def main():
 
     ini_oficial, fim_oficial, ini_previa, fim_previa = get_periodos_ra(df)
 
-    tab_oficial, tab_previa, tab_mensal, tab_analises, tab_quali, tab_simulador, tab_avancada, tab_dados = st.tabs([
-        "🔒 Visão Oficial", "⚡ Visão Prévia", "📅 Evolução Mensal", 
+    tab_oficial, tab_previa, tab_mensal, tab_franquias, tab_analises, tab_quali, tab_simulador, tab_avancada, tab_dados = st.tabs([
+        "🔒 Visão Oficial", "⚡ Visão Prévia", "📅 Evolução Mensal", "🏢 Análise por Franquia",
         "📊 Análises Detalhadas", "🔍 Análise Qualitativa", 
         "🎯 Simulador de Metas", "🔐 Análises Avançadas", "📂 Base Completa"
     ])
@@ -284,6 +284,63 @@ def main():
                 st.dataframe(tabela_display.style.applymap(colorir_tabela, subset=['Selo']).applymap(colorir_ir, subset=['IR (Meta ≥ 90%)']).format({'IS (Meta ≥ 90%)': '{:.1f}%', 'IN (Meta ≥ 70%)': '{:.1f}%', 'IR (Meta ≥ 90%)': '{:.1f}%', 'MA (Meta ≥ 7)': '{:.2f}', 'AR (Meta ≥ 8)': '{:.1f}'}), use_container_width=True, height=500)
             else: st.warning("Sem dados processáveis.")
         else: st.info("Sem dados no período.")
+
+    # --- ABA ANÁLISE POR FRANQUIA (NOVA) ---
+    with tab_franquias:
+        st.subheader("🏢 Dossiê da Franquia")
+        st.markdown("Selecione uma franquia para ver o desempenho individual detalhado (como se estivesse abrindo a pasta dela).")
+        
+        # Filtro de Data Global para a Aba
+        c_fd1, c_fd2 = st.columns(2)
+        d_fran_ini = c_fd1.date_input("Início Período", df['Data Reclamação'].min().date(), key="dfi")
+        d_fran_fim = c_fd2.date_input("Fim Período", df['Data Reclamação'].max().date(), key="dff")
+        
+        # Filtra DF pelo tempo primeiro
+        mask_fran_time = (df['Data Reclamação'].dt.date >= d_fran_ini) & (df['Data Reclamação'].dt.date <= d_fran_fim)
+        df_fran_time = df.loc[mask_fran_time].copy()
+        
+        # Lista de Franquias (Filtrada)
+        if not df_fran_time.empty:
+            lista_franquias = df_fran_time['Franquias'].dropna().astype(str).unique().tolist()
+            if "NÃO INFORMADO" in lista_franquias: lista_franquias.remove("NÃO INFORMADO")
+            lista_franquias.sort()
+            
+            # Selectbox (A "Pastinha")
+            fran_selecionada = st.selectbox("📂 Selecione a Franquia:", lista_franquias)
+            
+            # Filtra pela franquia
+            df_target = df_fran_time[df_fran_time['Franquias'] == fran_selecionada].copy()
+            
+            if not df_target.empty:
+                st.markdown("---")
+                # 1. Painel de KPIs (Reutilizando o padrão visual)
+                renderizar_painel_principal(df_target, f"Status: {fran_selecionada}")
+                
+                # 2. Gráficos de Detalhe
+                c_g1, c_g2 = st.columns(2)
+                with c_g1:
+                    st.markdown("##### 🚨 Principais Motivos")
+                    if 'Motivos Ecohouse' in df_target.columns:
+                        top_motivos = df_target['Motivos Ecohouse'].value_counts().reset_index()
+                        top_motivos.columns = ['Motivo', 'Qtd']
+                        fig_bar = px.bar(top_motivos.head(5), x='Qtd', y='Motivo', orientation='h', height=300)
+                        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
+                        st.plotly_chart(fig_bar, use_container_width=True)
+                
+                with c_g2:
+                    st.markdown("##### 📈 Evolução de Volume")
+                    df_target['Mes'] = df_target['Data Reclamação'].dt.to_period('M').astype(str)
+                    vol_tempo = df_target.groupby('Mes').size().reset_index(name='Volume')
+                    fig_line = px.line(vol_tempo, x='Mes', y='Volume', markers=True, height=300)
+                    st.plotly_chart(fig_line, use_container_width=True)
+                
+                # 3. Tabela de Casos daquela Franquia
+                st.markdown(f"##### 📋 Lista de Casos: {fran_selecionada}")
+                st.dataframe(df_target, use_container_width=True)
+            else:
+                st.warning("Sem dados para esta franquia no período selecionado.")
+        else:
+            st.info("Sem dados no período selecionado.")
 
     # --- ABA ANÁLISES DETALHADAS (COM DRILL-DOWN) ---
     with tab_analises:
@@ -388,7 +445,6 @@ def main():
             st.dataframe(gb_drill.style.background_gradient(subset=['Qtd_Casos'], cmap='Blues').format({'Nota_Media': '{:.2f}'}), use_container_width=True)
             
             # --- NOVO: BOTÃO DE DOWNLOAD XLSX ---
-            # Prepara os dados para o Excel (arredonda a média)
             gb_drill_download = gb_drill.copy()
             if 'Nota_Media' in gb_drill_download.columns:
                 gb_drill_download['Nota_Media'] = gb_drill_download['Nota_Media'].round(2)
@@ -403,7 +459,6 @@ def main():
                 file_name='detalhamento_cruzado.xlsx',
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
-            # ------------------------------------
             
         else: st.info("Nenhum caso avaliado.")
 
