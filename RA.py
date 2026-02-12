@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import os
 import math
+import io # Necessário para criar o arquivo Excel na memória
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
@@ -386,15 +387,23 @@ def main():
             ).reset_index().sort_values('Qtd_Casos', ascending=False)
             st.dataframe(gb_drill.style.background_gradient(subset=['Qtd_Casos'], cmap='Blues').format({'Nota_Media': '{:.2f}'}), use_container_width=True)
             
-            # --- NOVO: BOTÃO DE DOWNLOAD ---
-            csv = gb_drill.to_csv(index=False).encode('utf-8-sig') # utf-8-sig para acentos
+            # --- NOVO: BOTÃO DE DOWNLOAD XLSX ---
+            # Prepara os dados para o Excel (arredonda a média)
+            gb_drill_download = gb_drill.copy()
+            if 'Nota_Media' in gb_drill_download.columns:
+                gb_drill_download['Nota_Media'] = gb_drill_download['Nota_Media'].round(2)
+            
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                gb_drill_download.to_excel(writer, index=False, sheet_name='Detalhamento')
+            
             st.download_button(
-                label="📥 Baixar Dados (CSV)",
-                data=csv,
-                file_name='detalhamento_cruzado.csv',
-                mime='text/csv',
+                label="📥 Baixar Dados (XLSX)",
+                data=buffer.getvalue(),
+                file_name='detalhamento_cruzado.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
-            # -------------------------------
+            # ------------------------------------
             
         else: st.info("Nenhum caso avaliado.")
 
