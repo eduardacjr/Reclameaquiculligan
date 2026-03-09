@@ -83,10 +83,8 @@ def arredondar_ra(valor):
 def gerar_excel(df, nome_planilha="Dados"):
     """Gera um buffer de Excel na memória, formatando os números para exportação"""
     df_export = df.copy()
-    # Arredondar todas as colunas de ponto flutuante para 2 casas decimais
     for col in df_export.select_dtypes(include=['float', 'float64']).columns:
         df_export[col] = df_export[col].round(2)
-    # Converter datas se tiver timezone (o Excel não aceita timezone direto)
     for col in df_export.select_dtypes(include=['datetimetz']).columns:
         df_export[col] = df_export[col].dt.tz_localize(None)
         
@@ -397,68 +395,47 @@ def main():
         df_analise = df.loc[mask_mot].copy()
 
         if not df_analise.empty:
-            st.markdown("### ⏱️ Eficiência Operacional (SLA)")
-            if 'Data de Resposta' in df_analise.columns and 'Data Reclamação' in df_analise.columns:
-                df_sla = df_analise.dropna(subset=['Data de Resposta']).copy()
-                df_sla['Dias'] = (df_sla['Data de Resposta'] - df_sla['Data Reclamação']).dt.days
+            if 'Motivos Ecohouse' in df_analise.columns and 'Franquias' in df_analise.columns:
+                st.markdown("### 1. Visão por Motivos (Drill-down)")
                 
-                def bucket_sla(dias):
-                    if dias <= 1: return "Até 24h ⚡"
-                    elif dias <= 3: return "1 a 3 Dias ✅"
-                    elif dias <= 5: return "4 a 5 Dias ⚠️"
-                    else: return "Mais de 5 Dias 🚨"
+                lista_motivos_raw = df_analise['Motivos Ecohouse'].dropna().astype(str).unique().tolist()
+                if "NÃO INFORMADO" in lista_motivos_raw: lista_motivos_raw.remove("NÃO INFORMADO")
+                motivos_list = ["Todos (Visão Geral)"] + sorted(lista_motivos_raw)
                 
-                df_sla['Faixa SLA'] = df_sla['Dias'].apply(bucket_sla)
-                sla_counts = df_sla['Faixa SLA'].value_counts().reset_index()
-                sla_counts.columns = ['Faixa', 'Qtd']
-                ordem_sla = ["Até 24h ⚡", "1 a 3 Dias ✅", "4 a 5 Dias ⚠️", "Mais de 5 Dias 🚨"]
+                filtro_motivo = st.selectbox("🎯 Selecione um motivo para ver quais Franquias são responsáveis:", options=motivos_list)
                 
-                fig_sla = px.bar(sla_counts, x='Faixa', y='Qtd', text='Qtd', title="Tempo de Resposta por Faixas",
-                                 category_orders={'Faixa': ordem_sla}, color='Faixa',
-                                 color_discrete_map={"Até 24h ⚡": "#52c41a", "1 a 3 Dias ✅": "#1890ff", "4 a 5 Dias ⚠️": "#faad14", "Mais de 5 Dias 🚨": "#f5222d"})
-                st.plotly_chart(fig_sla, use_container_width=True)
+                c1, c2 = st.columns([1.3, 1])
+                with c1:
+                    if filtro_motivo == "Todos (Visão Geral)":
+                        gb_motivos = df_analise.groupby('Motivos Ecohouse').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
+                        st.markdown("##### 📋 Ranking de Motivos (Geral)")
+                        st.dataframe(gb_motivos.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True, height=400)
+                        st.download_button(label="📥 Baixar Ranking de Motivos (XLSX)", data=gerar_excel(gb_motivos, "Motivos"), file_name='ranking_motivos.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                        dados_grafico = gb_motivos.head(10)
+                        coluna_grafico = 'Motivos Ecohouse'
+                        titulo_grafico = "Top 10 Motivos (Volume)"
+                    else:
+                        df_filtered = df_analise[df_analise['Motivos Ecohouse'] == filtro_motivo]
+                        gb_drilldown = df_filtered.groupby('Franquias').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
+                        st.markdown(f"##### 🏢 Franquias com reclamações de: **{filtro_motivo}**")
+                        st.dataframe(gb_drilldown.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Reds'), use_container_width=True, height=400)
+                        st.download_button(label="📥 Baixar Franquias por Motivo (XLSX)", data=gerar_excel(gb_drilldown, "Franquias_Motivo"), file_name=f'franquias_{filtro_motivo}.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                        dados_grafico = gb_drilldown.head(10)
+                        coluna_grafico = 'Franquias'
+                        titulo_grafico = f"Top Franquias em: {filtro_motivo}"
 
-            st.markdown("---")
-            st.markdown("### 1. Visão por Motivos (Drill-down)")
-            
-            lista_motivos_raw = df_analise['Motivos Ecohouse'].dropna().astype(str).unique().tolist()
-            if "NÃO INFORMADO" in lista_motivos_raw: lista_motivos_raw.remove("NÃO INFORMADO")
-            motivos_list = ["Todos (Visão Geral)"] + sorted(lista_motivos_raw)
-            
-            filtro_motivo = st.selectbox("🎯 Selecione um motivo para ver quais Franquias são responsáveis:", options=motivos_list)
-            
-            c1, c2 = st.columns([1.3, 1])
-            with c1:
-                if filtro_motivo == "Todos (Visão Geral)":
-                    gb_motivos = df_analise.groupby('Motivos Ecohouse').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
-                    st.markdown("##### 📋 Ranking de Motivos (Geral)")
-                    st.dataframe(gb_motivos.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True, height=400)
-                    st.download_button(label="📥 Baixar Ranking de Motivos (XLSX)", data=gerar_excel(gb_motivos, "Motivos"), file_name='ranking_motivos.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-                    dados_grafico = gb_motivos.head(10)
-                    coluna_grafico = 'Motivos Ecohouse'
-                    titulo_grafico = "Top 10 Motivos (Volume)"
-                else:
-                    df_filtered = df_analise[df_analise['Motivos Ecohouse'] == filtro_motivo]
-                    gb_drilldown = df_filtered.groupby('Franquias').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
-                    st.markdown(f"##### 🏢 Franquias com reclamações de: **{filtro_motivo}**")
-                    st.dataframe(gb_drilldown.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Reds'), use_container_width=True, height=400)
-                    st.download_button(label="📥 Baixar Franquias por Motivo (XLSX)", data=gerar_excel(gb_drilldown, "Franquias_Motivo"), file_name=f'franquias_{filtro_motivo}.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-                    dados_grafico = gb_drilldown.head(10)
-                    coluna_grafico = 'Franquias'
-                    titulo_grafico = f"Top Franquias em: {filtro_motivo}"
+                with c2:
+                    if not dados_grafico.empty:
+                        fig = px.pie(dados_grafico, values='Volume', names=coluna_grafico, hole=0.4, title=titulo_grafico, color_discrete_sequence=px.colors.sequential.Blues_r)
+                        fig.update_traces(textposition='outside', textinfo='percent+label')
+                        fig.update_layout(showlegend=False, margin=dict(t=40, b=40, l=40, r=40))
+                        st.plotly_chart(fig, use_container_width=True)
 
-            with c2:
-                if not dados_grafico.empty:
-                    fig = px.pie(dados_grafico, values='Volume', names=coluna_grafico, hole=0.4, title=titulo_grafico, color_discrete_sequence=px.colors.sequential.Blues_r)
-                    fig.update_traces(textposition='outside', textinfo='percent+label')
-                    fig.update_layout(showlegend=False, margin=dict(t=40, b=40, l=40, r=40))
-                    st.plotly_chart(fig, use_container_width=True)
-
-            st.markdown("---") 
-            st.markdown("### 2. Ranking Geral de Franquias (Volume Total)")
-            gb_fran_geral = df_analise.groupby('Franquias').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
-            st.dataframe(gb_fran_geral.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True)
-            st.download_button(label="📥 Baixar Ranking de Franquias (XLSX)", data=gerar_excel(gb_fran_geral, "Ranking_Franquias"), file_name='ranking_franquias.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                st.markdown("---") 
+                st.markdown("### 2. Ranking Geral de Franquias (Volume Total)")
+                gb_fran_geral = df_analise.groupby('Franquias').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
+                st.dataframe(gb_fran_geral.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True)
+                st.download_button(label="📥 Baixar Ranking de Franquias (XLSX)", data=gerar_excel(gb_fran_geral, "Ranking_Franquias"), file_name='ranking_franquias.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
     with tab_quali:
         st.subheader("🔍 Análise Qualitativa Detalhada")
