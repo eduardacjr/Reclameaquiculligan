@@ -19,18 +19,11 @@ st.set_page_config(
 st.markdown("""
 <style>
     /* --- REMOVER CABEÇALHO PADRÃO DO STREAMLIT --- */
-    [data-testid="stHeader"] {
-        display: none;
-    }
-    [data-testid="stToolbar"] {
-        visibility: hidden;
-    }
+    [data-testid="stHeader"] { display: none; }
+    [data-testid="stToolbar"] { visibility: hidden; }
     
     /* Ajuste para o conteúdo colar no topo */
-    .block-container {
-        padding-top: 1rem !important;
-        padding-bottom: 1rem !important;
-    }
+    .block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
     
     /* Animação */
     @keyframes gradient-animation {
@@ -86,6 +79,21 @@ def arredondar_ra(valor):
     decimal, inteiro = math.modf(valor)
     if decimal >= 0.5: return math.ceil(valor)
     else: return math.floor(valor)
+
+def gerar_excel(df, nome_planilha="Dados"):
+    """Gera um buffer de Excel na memória, formatando os números para exportação"""
+    df_export = df.copy()
+    # Arredondar todas as colunas de ponto flutuante para 2 casas decimais
+    for col in df_export.select_dtypes(include=['float', 'float64']).columns:
+        df_export[col] = df_export[col].round(2)
+    # Converter datas se tiver timezone (o Excel não aceita timezone direto)
+    for col in df_export.select_dtypes(include=['datetimetz']).columns:
+        df_export[col] = df_export[col].dt.tz_localize(None)
+        
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df_export.to_excel(writer, index=False, sheet_name=nome_planilha)
+    return buffer.getvalue()
 
 def get_periodos_ra(df):
     if df is None or df.empty: return None, None, None, None
@@ -297,13 +305,20 @@ def main():
                 display_cols = ['Mês', 'Selo', 'IS (Meta ≥ 90%)', 'IN (Meta ≥ 70%)', 'IR (Meta ≥ 90%)', 'MA (Meta ≥ 7)', 'AR (Meta ≥ 8)', 'Avaliações', 'Volumetria']
                 tabela_display = tabela_final[display_cols]
                 st.dataframe(tabela_display.style.applymap(colorir_tabela, subset=['Selo']).applymap(colorir_ir, subset=['IR (Meta ≥ 90%)']).format({'IS (Meta ≥ 90%)': '{:.1f}%', 'IN (Meta ≥ 70%)': '{:.1f}%', 'IR (Meta ≥ 90%)': '{:.1f}%', 'MA (Meta ≥ 7)': '{:.2f}', 'AR (Meta ≥ 8)': '{:.1f}'}), use_container_width=True, height=500)
+                
+                st.download_button(
+                    label="📥 Baixar Evolução Mensal (XLSX)",
+                    data=gerar_excel(tabela_display, "Evolucao_Mensal"),
+                    file_name='evolucao_mensal.xlsx',
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
             else: st.warning("Sem dados processáveis.")
         else: st.info("Sem dados no período.")
 
-    # --- ABA ANÁLISE POR FRANQUIA (MULTISELECT) ---
+    # --- ABA ANÁLISE POR FRANQUIA ---
     with tab_franquias:
         st.subheader("🏢 Dossiê da Franquia")
-        st.markdown("Selecione uma ou mais franquias. Se deixar vazio, mostrará a **Rede Completa**.")
+        st.markdown("Selecione uma ou mais franquias para análise comparativa.")
         
         c_fd1, c_fd2 = st.columns(2)
         d_fran_ini = c_fd1.date_input("Início Período", df['Data Reclamação'].min().date(), key="dfi")
@@ -317,49 +332,58 @@ def main():
             if "NÃO INFORMADO" in lista_franquias: lista_franquias.remove("NÃO INFORMADO")
             lista_franquias.sort()
             
-            # MULTISELECT
             franquias_selecionadas = st.multiselect("📂 Selecione as Franquias:", lista_franquias)
             
-            # Lógica de Filtro
             if not franquias_selecionadas:
-                df_target = df_fran_time.copy() # Vazio = Todas
+                df_target = df_fran_time.copy()
                 titulo_painel = "Status: Rede Completa (Todas)"
             else:
                 df_target = df_fran_time[df_fran_time['Franquias'].isin(franquias_selecionadas)].copy()
-                if len(franquias_selecionadas) == 1:
-                    titulo_painel = f"Status: {franquias_selecionadas[0]}"
-                else:
-                    titulo_painel = f"Status: {len(franquias_selecionadas)} Franquias Selecionadas"
+                titulo_painel = f"Status: {len(franquias_selecionadas)} Franquias Selecionadas"
             
             if not df_target.empty:
                 st.markdown("---")
                 renderizar_painel_principal(df_target, titulo_painel)
                 
-                c_g1, c_g2 = st.columns(2)
-                with c_g1:
+                st.markdown("### 🕸️ Comparativo de Performance (Radar)")
+                kpis_target = calcular_indicadores(df_target)
+                kpis_rede = calcular_indicadores(df_fran_time)
+                categories = ['Resposta (IR)', 'Solução (IS)', 'Voltaria (IN)', 'Nota (MA)*', 'Score AR*']
+                val_target = [kpis_target['IR'], kpis_target['IS'], kpis_target['IN'], kpis_target['MA']*10, kpis_target['AR']*10]
+                val_rede = [kpis_rede['IR'], kpis_rede['IS'], kpis_rede['IN'], kpis_rede['MA']*10, kpis_rede['AR']*10]
+                
+                fig_radar = go.Figure()
+                fig_radar.add_trace(go.Scatterpolar(r=val_target, theta=categories, fill='toself', name='Seleção Atual', line_color='#0050b3'))
+                fig_radar.add_trace(go.Scatterpolar(r=val_rede, theta=categories, fill='toself', name='Média da Rede', line_color='#999', opacity=0.5))
+                fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])), showlegend=True, height=400)
+                
+                c_rad1, c_rad2 = st.columns([1, 1])
+                with c_rad1:
+                    st.plotly_chart(fig_radar, use_container_width=True)
+                    st.caption("*Nota (MA) e Score AR multiplicados por 10 para escala 0-100.")
+                with c_rad2:
                     st.markdown("##### 🚨 Principais Motivos")
                     if 'Motivos Ecohouse' in df_target.columns:
                         top_motivos = df_target['Motivos Ecohouse'].value_counts().reset_index()
                         top_motivos.columns = ['Motivo', 'Qtd']
-                        fig_bar = px.bar(top_motivos.head(5), x='Qtd', y='Motivo', orientation='h', height=300)
+                        fig_bar = px.bar(top_motivos.head(5), x='Qtd', y='Motivo', orientation='h', height=350)
                         fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
                         st.plotly_chart(fig_bar, use_container_width=True)
                 
-                with c_g2:
-                    st.markdown("##### 📈 Evolução de Volume")
-                    df_target['Mes'] = df_target['Data Reclamação'].dt.to_period('M').astype(str)
-                    vol_tempo = df_target.groupby('Mes').size().reset_index(name='Volume')
-                    fig_line = px.line(vol_tempo, x='Mes', y='Volume', markers=True, height=300)
-                    st.plotly_chart(fig_line, use_container_width=True)
-                
                 st.markdown(f"##### 📋 Lista de Casos")
                 st.dataframe(df_target, use_container_width=True)
+                st.download_button(
+                    label="📥 Baixar Casos da Franquia (XLSX)",
+                    data=gerar_excel(df_target, "Casos_Franquia"),
+                    file_name='casos_franquias_selecionadas.xlsx',
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
             else:
                 st.warning("Sem dados para esta seleção.")
         else:
             st.info("Sem dados no período selecionado.")
 
-    # --- ABA ANÁLISES DETALHADAS (COM DRILL-DOWN) ---
+    # --- ABA ANÁLISES DETALHADAS ---
     with tab_analises:
         st.subheader("🧩 Análise Detalhada: Motivos & Franquias")
         
@@ -372,7 +396,28 @@ def main():
         mask_mot = (df['Data Reclamação'].dt.date >= dm_ini) & (df['Data Reclamação'].dt.date <= dm_fim)
         df_analise = df.loc[mask_mot].copy()
 
-        if 'Motivos Ecohouse' in df_analise.columns and 'Franquias' in df_analise.columns:
+        if not df_analise.empty:
+            st.markdown("### ⏱️ Eficiência Operacional (SLA)")
+            if 'Data de Resposta' in df_analise.columns and 'Data Reclamação' in df_analise.columns:
+                df_sla = df_analise.dropna(subset=['Data de Resposta']).copy()
+                df_sla['Dias'] = (df_sla['Data de Resposta'] - df_sla['Data Reclamação']).dt.days
+                
+                def bucket_sla(dias):
+                    if dias <= 1: return "Até 24h ⚡"
+                    elif dias <= 3: return "1 a 3 Dias ✅"
+                    elif dias <= 5: return "4 a 5 Dias ⚠️"
+                    else: return "Mais de 5 Dias 🚨"
+                
+                df_sla['Faixa SLA'] = df_sla['Dias'].apply(bucket_sla)
+                sla_counts = df_sla['Faixa SLA'].value_counts().reset_index()
+                sla_counts.columns = ['Faixa', 'Qtd']
+                ordem_sla = ["Até 24h ⚡", "1 a 3 Dias ✅", "4 a 5 Dias ⚠️", "Mais de 5 Dias 🚨"]
+                
+                fig_sla = px.bar(sla_counts, x='Faixa', y='Qtd', text='Qtd', title="Tempo de Resposta por Faixas",
+                                 category_orders={'Faixa': ordem_sla}, color='Faixa',
+                                 color_discrete_map={"Até 24h ⚡": "#52c41a", "1 a 3 Dias ✅": "#1890ff", "4 a 5 Dias ⚠️": "#faad14", "Mais de 5 Dias 🚨": "#f5222d"})
+                st.plotly_chart(fig_sla, use_container_width=True)
+
             st.markdown("---")
             st.markdown("### 1. Visão por Motivos (Drill-down)")
             
@@ -388,6 +433,7 @@ def main():
                     gb_motivos = df_analise.groupby('Motivos Ecohouse').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
                     st.markdown("##### 📋 Ranking de Motivos (Geral)")
                     st.dataframe(gb_motivos.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True, height=400)
+                    st.download_button(label="📥 Baixar Ranking de Motivos (XLSX)", data=gerar_excel(gb_motivos, "Motivos"), file_name='ranking_motivos.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
                     dados_grafico = gb_motivos.head(10)
                     coluna_grafico = 'Motivos Ecohouse'
                     titulo_grafico = "Top 10 Motivos (Volume)"
@@ -396,6 +442,7 @@ def main():
                     gb_drilldown = df_filtered.groupby('Franquias').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
                     st.markdown(f"##### 🏢 Franquias com reclamações de: **{filtro_motivo}**")
                     st.dataframe(gb_drilldown.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Reds'), use_container_width=True, height=400)
+                    st.download_button(label="📥 Baixar Franquias por Motivo (XLSX)", data=gerar_excel(gb_drilldown, "Franquias_Motivo"), file_name=f'franquias_{filtro_motivo}.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
                     dados_grafico = gb_drilldown.head(10)
                     coluna_grafico = 'Franquias'
                     titulo_grafico = f"Top Franquias em: {filtro_motivo}"
@@ -406,12 +453,12 @@ def main():
                     fig.update_traces(textposition='outside', textinfo='percent+label')
                     fig.update_layout(showlegend=False, margin=dict(t=40, b=40, l=40, r=40))
                     st.plotly_chart(fig, use_container_width=True)
-                else: st.info("Sem dados para exibir gráfico.")
 
             st.markdown("---") 
             st.markdown("### 2. Ranking Geral de Franquias (Volume Total)")
             gb_fran_geral = df_analise.groupby('Franquias').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
             st.dataframe(gb_fran_geral.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True)
+            st.download_button(label="📥 Baixar Ranking de Franquias (XLSX)", data=gerar_excel(gb_fran_geral, "Ranking_Franquias"), file_name='ranking_franquias.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
     with tab_quali:
         st.subheader("🔍 Análise Qualitativa Detalhada")
@@ -461,18 +508,9 @@ def main():
             ).reset_index().sort_values('Qtd_Casos', ascending=False)
             st.dataframe(gb_drill.style.background_gradient(subset=['Qtd_Casos'], cmap='Blues').format({'Nota_Media': '{:.2f}'}), use_container_width=True)
             
-            # --- BOTÃO DE DOWNLOAD XLSX ---
-            gb_drill_download = gb_drill.copy()
-            if 'Nota_Media' in gb_drill_download.columns:
-                gb_drill_download['Nota_Media'] = gb_drill_download['Nota_Media'].round(2)
-            
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                gb_drill_download.to_excel(writer, index=False, sheet_name='Detalhamento')
-            
             st.download_button(
-                label="📥 Baixar Dados (XLSX)",
-                data=buffer.getvalue(),
+                label="📥 Baixar Cruzamento Qualitativo (XLSX)",
+                data=gerar_excel(gb_drill, "Qualitativo_Cruzado"),
                 file_name='detalhamento_cruzado.xlsx',
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
@@ -636,6 +674,13 @@ def main():
             m2 = df_display['ID Reclame Aqui'].astype(str).str.contains(search_id, case=False, na=False)
             df_display = df_display[m1 | m2]
         st.dataframe(df_display, use_container_width=True)
+        
+        st.download_button(
+            label="📥 Baixar Base Completa (XLSX)",
+            data=gerar_excel(df_display, "Base_Completa"),
+            file_name='base_dados_completa.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
 
 if __name__ == "__main__":
     main()
