@@ -305,7 +305,7 @@ def main():
             if not tabela_final.empty:
                 display_cols = ['Mês', 'Selo', 'IS (Meta ≥ 90%)', 'IN (Meta ≥ 70%)', 'IR (Meta ≥ 90%)', 'MA (Meta ≥ 7)', 'AR (Meta ≥ 8)', 'Avaliações', 'Volumetria']
                 tabela_display = tabela_final[display_cols]
-                st.dataframe(tabela_display.style.applymap(colorir_tabela, subset=['Selo']).applymap(colorir_ir, subset=['IR (Meta ≥ 90%)']).format({'IS (Meta ≥ 90%)': '{:.1f}%', 'IN (Meta ≥ 70%)': '{:.1f}%', 'IR (Meta ≥ 90%)': '{:.1f}%', 'MA (Meta ≥ 7)': '{:.2f}', 'AR (Meta ≥ 8)': '{:.1f}'}), use_container_width=True, height=500)
+                st.dataframe(tabela_display.style.map(colorir_tabela, subset=['Selo']).map(colorir_ir, subset=['IR (Meta ≥ 90%)']).format({'IS (Meta ≥ 90%)': '{:.1f}%', 'IN (Meta ≥ 70%)': '{:.1f}%', 'IR (Meta ≥ 90%)': '{:.1f}%', 'MA (Meta ≥ 7)': '{:.2f}', 'AR (Meta ≥ 8)': '{:.1f}'}), use_container_width=True, height=500)
                 
                 # --- BOTÃO DOWNLOAD: Evolução Mensal ---
                 st.download_button(
