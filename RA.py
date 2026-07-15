@@ -81,7 +81,43 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- CONSTANTES ---
+
+MESES_PT = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho',
+            7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
+
+# Paletas validadas (colorblind-safe) para os gráficos das visões de operador e notas
+COR_STATUS_HUGME = {'Novo': '#d03b3b', 'Pendente': '#eda100', 'Respondido': '#2a78d6', 'Fechado': '#008300'}
+ORDEM_STATUS_HUGME = ['Novo', 'Pendente', 'Respondido', 'Fechado']
+
+ORDEM_FAIXAS_AGING = ['0-7 dias', '8-15 dias', '16-30 dias', 'Acima de 30 dias']
+COR_FAIXA_AGING = {'0-7 dias': '#86b6ef', '8-15 dias': '#3987e5', '16-30 dias': '#1c5cab', 'Acima de 30 dias': '#0d366b'}
+
+ORDEM_GRUPOS_NOTA = ['Críticas (0-5)', 'Neutras (6-7)', 'Promotoras (8-10)']
+COR_GRUPO_NOTA = {'Críticas (0-5)': '#d03b3b', 'Neutras (6-7)': '#eda100', 'Promotoras (8-10)': '#008300'}
+
+CORES_OPERADORES = ['#2a78d6', '#008300', '#e87ba4', '#eda100', '#1baf7a', '#eb6834', '#4a3aa7', '#e34948']
+
 # --- FUNÇÕES ---
+
+def formatar_mes(periodo):
+    return f"{MESES_PT[periodo.month]}/{periodo.year}"
+
+def grupo_nota(nota):
+    if nota <= 5: return 'Críticas (0-5)'
+    elif nota <= 7: return 'Neutras (6-7)'
+    return 'Promotoras (8-10)'
+
+def estilizar_grafico(fig, altura=340):
+    fig.update_layout(
+        height=altura, plot_bgcolor='white', paper_bgcolor='white',
+        margin=dict(t=30, b=10, l=10, r=10),
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0, title=None),
+        font=dict(family='system-ui, -apple-system, "Segoe UI", sans-serif', color='#333'),
+    )
+    fig.update_xaxes(gridcolor='#e1e0d9', zerolinecolor='#c3c2b7', linecolor='#c3c2b7')
+    fig.update_yaxes(gridcolor='#e1e0d9', zerolinecolor='#c3c2b7', linecolor='#c3c2b7')
+    return fig
 
 @st.cache_data
 def converter_para_excel(df):
@@ -170,9 +206,7 @@ def gerar_tabela_mensal(df):
     for periodo, dados_mes in df.groupby('Mes_Ano'):
         kpis = calcular_indicadores(dados_mes)
         status, _, _, emoji = definir_status_final(kpis, ignorar_volume=True)
-        meses = {1:'Janeiro', 2:'Fevereiro', 3:'Março', 4:'Abril', 5:'Maio', 6:'Junho',
-                 7:'Julho', 8:'Agosto', 9:'Setembro', 10:'Outubro', 11:'Novembro', 12:'Dezembro'}
-        nome_mes = f"{meses[periodo.month]} {periodo.year}"
+        nome_mes = f"{MESES_PT[periodo.month]} {periodo.year}"
         selo_display = f"{emoji} {status}" if status != "Sem Reputação" else status
         resultados.append({
             'Referência': periodo, 'Mês': nome_mes, 'Selo': selo_display,
@@ -201,6 +235,13 @@ def colorir_ir(val):
     except: pass
     return ''
 
+def converter_data_avaliacao(valor):
+    """A coluna 'Data Avaliacao' vem mista do HugMe: parte datetime, parte número serial do Excel."""
+    if pd.isna(valor): return pd.NaT
+    if isinstance(valor, (int, float)):
+        return pd.Timestamp('1899-12-30') + pd.Timedelta(days=float(valor))
+    return pd.to_datetime(valor, errors='coerce')
+
 @st.cache_data
 def carregar_dados():
     file_path = 'BaseEco.xlsx'
@@ -209,6 +250,12 @@ def carregar_dados():
     df['Data Reclamação'] = pd.to_datetime(df['Data Reclamação'])
     if 'Data de Resposta' in df.columns:
         df['Data de Resposta'] = pd.to_datetime(df['Data de Resposta'], errors='coerce')
+    if 'Data Avaliacao' in df.columns:
+        df['Data Avaliacao'] = df['Data Avaliacao'].map(converter_data_avaliacao)
+    if 'Status Hugme' in df.columns:
+        df['Status Hugme'] = df['Status Hugme'].fillna('Não informado').astype(str).str.strip().str.capitalize()
+    if 'Atribuido Para' in df.columns:
+        df['Atribuido Para'] = df['Atribuido Para'].fillna('Não atribuído').astype(str).str.strip()
     cols_str = ['Status RA', 'Seu problema foi resolvido?', 'Voltaria a fazer negócio?', 'Motivos Ecohouse', 'Franquias', 'Origem', 'Marca']
     for col in cols_str:
         if col in df.columns: df[col] = df[col].astype(str).str.strip().str.upper()
@@ -270,9 +317,9 @@ def main():
 
     ini_oficial, fim_oficial, ini_previa, fim_previa = get_periodos_ra(df)
 
-    tab_oficial, tab_previa, tab_mensal, tab_franquias, tab_analises, tab_quali, tab_simulador, tab_avancada, tab_dados = st.tabs([
-        "🔒 Visão Oficial", "⚡ Visão Prévia", "📅 Evolução Mensal", "🏢 Análise por Franquia",
-        "📊 Análises Detalhadas", "🔍 Análise Qualitativa", 
+    tab_oficial, tab_previa, tab_mensal, tab_operador, tab_notas, tab_franquias, tab_analises, tab_quali, tab_simulador, tab_avancada, tab_dados = st.tabs([
+        "🔒 Visão Oficial", "⚡ Visão Prévia", "📅 Evolução Mensal", "👥 Visão por Operador", "⭐ Visão de Notas",
+        "🏢 Análise por Franquia", "📊 Análises Detalhadas", "🔍 Análise Qualitativa",
         "🎯 Simulador de Metas", "🔐 Análises Avançadas", "📂 Base Completa"
     ])
 
@@ -316,6 +363,281 @@ def main():
                 )
             else: st.warning("Sem dados processáveis.")
         else: st.info("Sem dados no período.")
+
+    # --- ABA VISÃO POR OPERADOR ---
+    with tab_operador:
+        st.subheader("👥 Visão por Operador")
+        st.markdown("""<div class='explanation-box'><b>📌 Legenda do Status Hugme:</b><br>
+        🔴 <b>Novo</b> = sem resposta pública &nbsp;|&nbsp; 🟡 <b>Pendente</b> = cliente postou réplica &nbsp;|&nbsp;
+        🔵 <b>Respondido</b> = respondido no público &nbsp;|&nbsp; 🟢 <b>Fechado</b> = cliente avaliou</div>""", unsafe_allow_html=True)
+
+        min_d_op = df['Data Reclamação'].min().date()
+        max_d_op = df['Data Reclamação'].max().date()
+        operadores_todos = sorted(df['Atribuido Para'].dropna().unique().tolist())
+        mapa_cores_op = {op: CORES_OPERADORES[i % len(CORES_OPERADORES)] for i, op in enumerate(operadores_todos)}
+
+        c_op1, c_op2, c_op3 = st.columns([1, 1, 2])
+        d_op_ini = c_op1.date_input("Início", min_d_op, min_value=min_d_op, max_value=max_d_op, key="op_ini")
+        d_op_fim = c_op2.date_input("Fim", max_d_op, min_value=min_d_op, max_value=max_d_op, key="op_fim")
+        ops_sel = c_op3.multiselect("👤 Operadores (vazio = todos):", operadores_todos, key="op_sel")
+
+        mask_op = (df['Data Reclamação'].dt.date >= d_op_ini) & (df['Data Reclamação'].dt.date <= d_op_fim)
+        df_op = df.loc[mask_op].copy()
+        if ops_sel: df_op = df_op[df_op['Atribuido Para'].isin(ops_sel)]
+
+        if df_op.empty:
+            st.info("Sem dados para o filtro selecionado.")
+        else:
+            # --- 1. CARGA DE CASOS POR OPERADOR ---
+            st.markdown("### 📋 Casos Atribuídos por Operador")
+            pivot_status = df_op.pivot_table(index='Atribuido Para', columns='Status Hugme',
+                                             values='ID Reclame Aqui', aggfunc='count', fill_value=0)
+            for st_col in ORDEM_STATUS_HUGME:
+                if st_col not in pivot_status.columns: pivot_status[st_col] = 0
+            resumo_op = pd.DataFrame({'Casos Atribuídos': df_op.groupby('Atribuido Para').size()})
+            resumo_op = resumo_op.join(pivot_status[ORDEM_STATUS_HUGME])
+            resumo_op['% Sem Resposta'] = (resumo_op['Novo'] / resumo_op['Casos Atribuídos']) * 100
+            resumo_op = resumo_op.sort_values('Casos Atribuídos', ascending=False).reset_index()
+            resumo_op = resumo_op.rename(columns={
+                'Novo': 'Novo (Sem Resposta Pública)', 'Pendente': 'Pendente (Réplica)',
+                'Respondido': 'Respondido (Público)', 'Fechado': 'Fechado (Avaliado)'})
+
+            c_t1, c_t2 = st.columns([1.2, 1])
+            with c_t1:
+                st.dataframe(resumo_op.style
+                             .background_gradient(subset=['Casos Atribuídos'], cmap='Blues')
+                             .map(lambda v: 'background-color: #fdecea; color: #c62828; font-weight: bold;' if isinstance(v, (int, float)) and v > 0 else '', subset=['Novo (Sem Resposta Pública)'])
+                             .format({'% Sem Resposta': '{:.1f}%'}),
+                             use_container_width=True, hide_index=True)
+                st.download_button(label="📥 Baixar Resumo por Operador (XLSX)", data=converter_para_excel(resumo_op),
+                                   file_name='resumo_operadores.xlsx',
+                                   mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key="dl_op_resumo")
+            with c_t2:
+                df_status_plot = df_op.groupby(['Atribuido Para', 'Status Hugme']).size().reset_index(name='Casos')
+                fig_st = px.bar(df_status_plot, y='Atribuido Para', x='Casos', color='Status Hugme', orientation='h',
+                                text='Casos', color_discrete_map=COR_STATUS_HUGME,
+                                category_orders={'Status Hugme': ORDEM_STATUS_HUGME})
+                fig_st.update_traces(marker_line_color='white', marker_line_width=2, textposition='inside', textangle=0)
+                fig_st.update_layout(barmode='stack', yaxis={'categoryorder': 'total ascending', 'title': None}, xaxis={'title': 'Casos'},
+                                     uniformtext_minsize=10, uniformtext_mode='hide')
+                st.plotly_chart(estilizar_grafico(fig_st), use_container_width=True)
+
+            # --- 2. AGING DOS CASOS SEM RESPOSTA PÚBLICA ---
+            st.markdown("---")
+            st.markdown("### ⏳ Aging dos Casos Sem Resposta Pública (Status: Novo)")
+            hoje_ref = pd.Timestamp.now().normalize()
+            df_novo = df_op[df_op['Status Hugme'] == 'Novo'].copy()
+
+            if df_novo.empty:
+                st.success("🎉 Nenhum caso sem resposta pública no filtro atual!")
+            else:
+                df_novo['Aging (dias)'] = (hoje_ref - df_novo['Data Reclamação'].dt.normalize()).dt.days
+                df_novo['Faixa de Aging'] = pd.cut(df_novo['Aging (dias)'], bins=[-1, 7, 15, 30, 10**6], labels=ORDEM_FAIXAS_AGING)
+
+                acima_30 = int((df_novo['Aging (dias)'] > 30).sum())
+                k_ag1, k_ag2, k_ag3, k_ag4 = st.columns(4)
+                k_ag1.markdown(f"""<div class="kpi-container"><div class="kpi-title">Casos Sem Resposta</div><div class="kpi-value" style="color: #c62828;">{len(df_novo)}</div></div>""", unsafe_allow_html=True)
+                k_ag2.markdown(f"""<div class="kpi-container"><div class="kpi-title">Aging Médio</div><div class="kpi-value">{df_novo['Aging (dias)'].mean():.0f} dias</div></div>""", unsafe_allow_html=True)
+                k_ag3.markdown(f"""<div class="kpi-container"><div class="kpi-title">Caso Mais Antigo</div><div class="kpi-value">{df_novo['Aging (dias)'].max():.0f} dias</div></div>""", unsafe_allow_html=True)
+                k_ag4.markdown(f"""<div class="kpi-container"><div class="kpi-title">Acima de 30 Dias</div><div class="kpi-value" style="color: {'#c62828' if acima_30 > 0 else '#2e7d32'};">{acima_30}</div></div>""", unsafe_allow_html=True)
+                st.caption(f"Aging calculado em dias corridos até hoje ({hoje_ref.strftime('%d/%m/%Y')}).")
+
+                c_ag1, c_ag2 = st.columns(2)
+                with c_ag1:
+                    st.markdown("##### 📊 Aging por Operador")
+                    agg_aging = df_novo.groupby(['Atribuido Para', 'Faixa de Aging'], observed=True).size().reset_index(name='Casos')
+                    fig_ag = px.bar(agg_aging, y='Atribuido Para', x='Casos', color='Faixa de Aging', orientation='h',
+                                    text='Casos', color_discrete_map=COR_FAIXA_AGING,
+                                    category_orders={'Faixa de Aging': ORDEM_FAIXAS_AGING})
+                    fig_ag.update_traces(marker_line_color='white', marker_line_width=2, textposition='inside', textangle=0)
+                    fig_ag.update_layout(barmode='stack', yaxis={'categoryorder': 'total ascending', 'title': None}, xaxis={'title': 'Casos'},
+                                         uniformtext_minsize=10, uniformtext_mode='hide')
+                    st.plotly_chart(estilizar_grafico(fig_ag), use_container_width=True)
+                with c_ag2:
+                    st.markdown("##### 🚨 Motivos dos Casos Sem Resposta")
+                    top_mot_novo = df_novo['Motivos Ecohouse'].value_counts().reset_index()
+                    top_mot_novo.columns = ['Motivo', 'Casos']
+                    fig_mot = px.bar(top_mot_novo.head(8), x='Casos', y='Motivo', orientation='h', text='Casos')
+                    fig_mot.update_traces(marker_color='#2a78d6', marker_line_color='white', marker_line_width=2, textposition='outside')
+                    fig_mot.update_layout(yaxis={'categoryorder': 'total ascending', 'title': None}, xaxis={'title': 'Casos'}, showlegend=False)
+                    st.plotly_chart(estilizar_grafico(fig_mot), use_container_width=True)
+
+                st.markdown("##### 📋 Detalhamento: Caso a Caso (com Motivo e Franquia)")
+                cols_detalhe = ['Atribuido Para', 'ID Reclame Aqui', 'Título', 'Data Reclamação',
+                                'Aging (dias)', 'Faixa de Aging', 'Motivos Ecohouse', 'Franquias']
+                cols_detalhe = [c for c in cols_detalhe if c in df_novo.columns]
+                df_detalhe = df_novo[cols_detalhe].sort_values('Aging (dias)', ascending=False)
+
+                def destacar_aging(row):
+                    estilo = 'background-color: #fdecea;' if row['Aging (dias)'] > 30 else ''
+                    return [estilo] * len(row)
+                st.dataframe(df_detalhe.style.apply(destacar_aging, axis=1).format({'Data Reclamação': '{:%d/%m/%Y}'}),
+                             use_container_width=True, hide_index=True)
+                st.download_button(label="📥 Baixar Casos Sem Resposta (XLSX)", data=converter_para_excel(df_detalhe),
+                                   file_name='casos_sem_resposta_publica.xlsx',
+                                   mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key="dl_op_aging")
+
+            # --- 3. NOTAS POR OPERADOR ---
+            st.markdown("---")
+            st.markdown("### ⭐ Notas por Operador")
+            st.caption("Baseado na **Data de Avaliação** (quando o cliente avaliou), não na data da reclamação. "
+                       "O filtro de operadores acima se aplica; o filtro de datas não (use o seletor de mês abaixo).")
+
+            df_aval = df[df['Nota'].notna() & df['Data Avaliacao'].notna()].copy()
+            if ops_sel: df_aval = df_aval[df_aval['Atribuido Para'].isin(ops_sel)]
+
+            if df_aval.empty:
+                st.info("Sem avaliações para o filtro selecionado.")
+            else:
+                df_aval['Mes_Aval'] = df_aval['Data Avaliacao'].dt.to_period('M')
+                meses_disp = sorted(df_aval['Mes_Aval'].unique(), reverse=True)
+                mes_sel = st.selectbox("📅 Mês de referência:", meses_disp, format_func=formatar_mes, key="op_mes")
+
+                df_mes_aval = df_aval[df_aval['Mes_Aval'] == mes_sel]
+                st.markdown(f"##### 📆 Detalhe do Mês: {formatar_mes(mes_sel)}")
+                if df_mes_aval.empty:
+                    st.info("Sem avaliações neste mês.")
+                else:
+                    resumo_notas = df_mes_aval.groupby('Atribuido Para').agg(
+                        Avaliações=('Nota', 'count'),
+                        Nota_Média=('Nota', 'mean'),
+                        Notas_0_5=('Nota', lambda x: int((x <= 5).sum())),
+                        Notas_6_7=('Nota', lambda x: int(x.between(6, 7).sum())),
+                        Notas_8_10=('Nota', lambda x: int((x >= 8).sum())),
+                        Resolvido_Sim=('Seu problema foi resolvido?', lambda x: int((x == 'SIM').sum())),
+                        Voltaria_Sim=('Voltaria a fazer negócio?', lambda x: int((x == 'SIM').sum())),
+                    ).reset_index().sort_values('Avaliações', ascending=False)
+                    resumo_notas['% Resolvido'] = resumo_notas['Resolvido_Sim'] / resumo_notas['Avaliações'] * 100
+                    resumo_notas['% Voltaria'] = resumo_notas['Voltaria_Sim'] / resumo_notas['Avaliações'] * 100
+                    resumo_notas = resumo_notas.rename(columns={
+                        'Nota_Média': 'Nota Média', 'Notas_0_5': 'Notas 0-5', 'Notas_6_7': 'Notas 6-7',
+                        'Notas_8_10': 'Notas 8-10', 'Resolvido_Sim': 'Problema Resolvido (Sim)', 'Voltaria_Sim': 'Voltaria Negócio (Sim)'})
+                    st.dataframe(resumo_notas.style
+                                 .background_gradient(subset=['Nota Média'], cmap='RdYlGn', vmin=0, vmax=10)
+                                 .format({'Nota Média': '{:.2f}', '% Resolvido': '{:.0f}%', '% Voltaria': '{:.0f}%'}),
+                                 use_container_width=True, hide_index=True)
+                    st.download_button(label="📥 Baixar Notas do Mês (XLSX)", data=converter_para_excel(resumo_notas),
+                                       file_name=f'notas_operadores_{mes_sel}.xlsx',
+                                       mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key="dl_op_notas_mes")
+
+                st.markdown(f"##### 📈 Histórico dos Últimos 6 Meses (até {formatar_mes(mes_sel)})")
+                df_hist = df_aval[(df_aval['Mes_Aval'] >= mes_sel - 5) & (df_aval['Mes_Aval'] <= mes_sel)].copy()
+                hist = df_hist.groupby(['Atribuido Para', 'Mes_Aval']).agg(
+                    Qtd=('Nota', 'count'),
+                    Media=('Nota', 'mean'),
+                    ResolvidoPct=('Seu problema foi resolvido?', lambda x: (x == 'SIM').mean() * 100),
+                    VoltariaPct=('Voltaria a fazer negócio?', lambda x: (x == 'SIM').mean() * 100),
+                ).reset_index()
+
+                opcoes_metrica = {
+                    'Nota Média': ('Media', '{:.2f}'),
+                    'Qtd de Avaliações': ('Qtd', '{:.0f}'),
+                    '% Problema Resolvido': ('ResolvidoPct', '{:.0f}%'),
+                    '% Voltaria a Fazer Negócio': ('VoltariaPct', '{:.0f}%'),
+                }
+                metrica_sel = st.radio("Métrica:", list(opcoes_metrica.keys()), horizontal=True, key="op_metrica")
+                col_metrica, fmt_metrica = opcoes_metrica[metrica_sel]
+
+                hist = hist.sort_values('Mes_Aval')
+                hist['Mês'] = hist['Mes_Aval'].map(formatar_mes)
+                ordem_meses_hist = [formatar_mes(p) for p in sorted(hist['Mes_Aval'].unique())]
+
+                fig_hist = px.line(hist, x='Mês', y=col_metrica, color='Atribuido Para', markers=True,
+                                   color_discrete_map=mapa_cores_op, category_orders={'Mês': ordem_meses_hist})
+                fig_hist.update_traces(line_width=2, marker_size=8)
+                fig_hist.update_layout(yaxis={'title': metrica_sel}, xaxis={'title': None})
+                if '%' in metrica_sel: fig_hist.update_yaxes(range=[0, 105])
+                st.plotly_chart(estilizar_grafico(fig_hist, altura=380), use_container_width=True)
+
+                pivot_hist = hist.pivot_table(index='Atribuido Para', columns='Mês', values=col_metrica)
+                pivot_hist = pivot_hist[[m for m in ordem_meses_hist if m in pivot_hist.columns]]
+                pivot_display = pivot_hist.copy()
+                for c in pivot_display.columns:
+                    pivot_display[c] = pivot_display[c].map(lambda v: '-' if pd.isna(v) else fmt_metrica.format(v))
+                pivot_display = pivot_display.reset_index()
+                pivot_hist = pivot_hist.reset_index()
+                st.dataframe(pivot_display, use_container_width=True, hide_index=True)
+                st.download_button(label="📥 Baixar Histórico 6 Meses (XLSX)", data=converter_para_excel(pivot_hist),
+                                   file_name='historico_notas_operadores.xlsx',
+                                   mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key="dl_op_hist")
+
+    # --- ABA VISÃO DE NOTAS ---
+    with tab_notas:
+        st.subheader("⭐ Visão de Notas (Avaliações Recebidas)")
+        st.markdown("""<div class='explanation-box'><b>📌 Como funciona esta visão?</b><br>
+        Mostra as notas recebidas por mês, com base na <b>Data de Avaliação</b> (quando o cliente avaliou no RA).
+        Grupos: 🔴 <b>Críticas (0-5)</b> | 🟡 <b>Neutras (6-7)</b> | 🟢 <b>Promotoras (8-10)</b></div>""", unsafe_allow_html=True)
+
+        df_nt = df[df['Nota'].notna() & df['Data Avaliacao'].notna()].copy()
+        if df_nt.empty:
+            st.info("Sem avaliações na base.")
+        else:
+            df_nt['Mes_Aval'] = df_nt['Data Avaliacao'].dt.to_period('M')
+            df_nt['Nota Int'] = df_nt['Nota'].astype(int)
+            df_nt['Grupo'] = df_nt['Nota Int'].apply(grupo_nota)
+
+            meses_nt = sorted(df_nt['Mes_Aval'].unique(), reverse=True)
+            mes_nt = st.selectbox("📅 Mês de referência:", meses_nt, format_func=formatar_mes, key="nt_mes")
+            df_nt_mes = df_nt[df_nt['Mes_Aval'] == mes_nt]
+
+            total_nt = len(df_nt_mes)
+            criticas = int((df_nt_mes['Grupo'] == 'Críticas (0-5)').sum())
+            neutras = int((df_nt_mes['Grupo'] == 'Neutras (6-7)').sum())
+            promotoras = int((df_nt_mes['Grupo'] == 'Promotoras (8-10)').sum())
+            def pct(qtd): return f"{qtd / total_nt * 100:.0f}% do mês" if total_nt > 0 else "-"
+
+            k_nt1, k_nt2, k_nt3, k_nt4, k_nt5 = st.columns(5)
+            k_nt1.markdown(f"""<div class="kpi-container"><div class="kpi-title">Notas Recebidas</div><div class="kpi-value">{total_nt}</div><div style="font-size: 0.7rem; color: #888;">{formatar_mes(mes_nt)}</div></div>""", unsafe_allow_html=True)
+            k_nt2.markdown(f"""<div class="kpi-container"><div class="kpi-title">Nota Média</div><div class="kpi-value">{df_nt_mes['Nota'].mean():.2f}</div><div style="font-size: 0.7rem; color: #888;">Meta ≥ 7</div></div>""", unsafe_allow_html=True)
+            k_nt3.markdown(f"""<div class="kpi-container"><div class="kpi-title">🔴 Críticas (0-5)</div><div class="kpi-value" style="color: #c62828;">{criticas}</div><div style="font-size: 0.7rem; color: #888;">{pct(criticas)}</div></div>""", unsafe_allow_html=True)
+            k_nt4.markdown(f"""<div class="kpi-container"><div class="kpi-title">🟡 Neutras (6-7)</div><div class="kpi-value" style="color: #b57d00;">{neutras}</div><div style="font-size: 0.7rem; color: #888;">{pct(neutras)}</div></div>""", unsafe_allow_html=True)
+            k_nt5.markdown(f"""<div class="kpi-container"><div class="kpi-title">🟢 Promotoras (8-10)</div><div class="kpi-value" style="color: #2e7d32;">{promotoras}</div><div style="font-size: 0.7rem; color: #888;">{pct(promotoras)}</div></div>""", unsafe_allow_html=True)
+
+            st.markdown(f"##### 📊 Distribuição das Notas em {formatar_mes(mes_nt)}")
+            dist = df_nt_mes['Nota Int'].value_counts().reindex(range(11), fill_value=0).reset_index()
+            dist.columns = ['Nota', 'Qtd']
+            dist['Grupo'] = dist['Nota'].apply(grupo_nota)
+            fig_dist = px.bar(dist, x='Nota', y='Qtd', color='Grupo', text='Qtd',
+                              color_discrete_map=COR_GRUPO_NOTA, category_orders={'Grupo': ORDEM_GRUPOS_NOTA})
+            fig_dist.update_traces(marker_line_color='white', marker_line_width=2, textposition='outside')
+            fig_dist.update_xaxes(dtick=1, title='Nota')
+            fig_dist.update_yaxes(title='Quantidade')
+            st.plotly_chart(estilizar_grafico(fig_dist), use_container_width=True)
+
+            st.markdown("---")
+            st.markdown(f"##### 📈 Evolução Mensal (Últimos 6 Meses até {formatar_mes(mes_nt)})")
+            df_h_nt = df_nt[(df_nt['Mes_Aval'] >= mes_nt - 5) & (df_nt['Mes_Aval'] <= mes_nt)].copy()
+            df_h_nt = df_h_nt.sort_values('Mes_Aval')
+            df_h_nt['Mês'] = df_h_nt['Mes_Aval'].map(formatar_mes)
+            ordem_meses_nt = [formatar_mes(p) for p in sorted(df_h_nt['Mes_Aval'].unique())]
+
+            agg_h = df_h_nt.groupby(['Mês', 'Grupo']).size().reset_index(name='Qtd')
+            fig_evo = px.bar(agg_h, x='Mês', y='Qtd', color='Grupo', text='Qtd',
+                             color_discrete_map=COR_GRUPO_NOTA,
+                             category_orders={'Mês': ordem_meses_nt, 'Grupo': ORDEM_GRUPOS_NOTA})
+            fig_evo.update_traces(marker_line_color='white', marker_line_width=2, textposition='inside', textangle=0)
+            fig_evo.update_layout(barmode='stack', xaxis={'title': None}, yaxis={'title': 'Notas Recebidas'},
+                                  uniformtext_minsize=10, uniformtext_mode='hide')
+            st.plotly_chart(estilizar_grafico(fig_evo, altura=380), use_container_width=True)
+
+            piv_nt = df_h_nt.pivot_table(index='Mes_Aval', columns='Nota Int', values='ID Reclame Aqui',
+                                         aggfunc='count', fill_value=0)
+            piv_nt = piv_nt.reindex(columns=range(11), fill_value=0)
+            piv_nt['Total'] = piv_nt.sum(axis=1)
+            piv_nt['Nota Média'] = df_h_nt.groupby('Mes_Aval')['Nota'].mean()
+            piv_nt.index = [formatar_mes(p) for p in piv_nt.index]
+            piv_nt.columns = [f'Nota {c}' if isinstance(c, int) else c for c in piv_nt.columns]
+            piv_nt = piv_nt.reset_index().rename(columns={'index': 'Mês'})
+
+            st.markdown("##### 📋 Quantidade de Notas por Mês (0 a 10)")
+            cols_notas = [c for c in piv_nt.columns if c.startswith('Nota ') and c != 'Nota Média']
+            st.dataframe(piv_nt.style
+                         .background_gradient(subset=cols_notas, cmap='Blues', axis=None)
+                         .format({'Nota Média': '{:.2f}'}),
+                         use_container_width=True, hide_index=True)
+            st.download_button(label="📥 Baixar Notas por Mês (XLSX)", data=converter_para_excel(piv_nt),
+                               file_name='notas_por_mes.xlsx',
+                               mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key="dl_nt_piv")
 
     # --- ABA ANÁLISE POR FRANQUIA (MULTISELECT) ---
     with tab_franquias:
