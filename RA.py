@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import os
+import re
 import math
 import io
 from datetime import datetime, timedelta
@@ -242,6 +243,123 @@ def converter_data_avaliacao(valor):
         return pd.Timestamp('1899-12-30') + pd.Timedelta(days=float(valor))
     return pd.to_datetime(valor, errors='coerce')
 
+# --- PADRONIZAÇÃO DE FRANQUIAS: Matriz (visão unificada) > Franquia > Regional ---
+# A visão unificada vem de Matriz_Franquias.xlsx, extraído do cadastro de Prestador de Serviço
+# (Franquia -> Matriz -> Nome no dashboard). Franquia fora do arquivo = grupo próprio.
+ARQ_MATRIZES = 'Matriz_Franquias.xlsx'
+# Códigos antigos que aparecem na Base Eco mas não estão no De-Para.xlsx
+CODIGOS_EXTRAS = {'FRQ_ECO_SP_SÃO_PAULO_2': 'FRQ_ECOHOUSE SÃO PAULO_2', 'FRQ_ECO_SP_ZONA_NORTE_2': 'FRQ_ECO_SP_Z_NORTE_2'}
+SEM_FRANQUIA = 'Sem franquia'
+SEM_REGIONAL = 'Regional não informada'
+_RE_REGIONAL = re.compile(r'\s+(R\d+(?:\s*-\s*MATRIZ)?)\s*$')
+
+def _sem_regional(nome):
+    return _RE_REGIONAL.sub('', str(nome).strip()).strip()
+
+def _regional(nome):
+    m = _RE_REGIONAL.search(str(nome).strip())
+    return re.sub(r'\s*-\s*', ' - ', m.group(1)) if m else None
+
+@st.cache_data
+def carregar_de_para():
+    """Código antigo (Franquia Range CEP) -> franquia nova sem regional, a partir do De-Para.xlsx."""
+    if not os.path.exists('De-Para.xlsx'): return {}
+    dp = pd.read_excel('De-Para.xlsx', dtype=str).dropna()
+    dp.columns = ['codigo', 'novo'][:len(dp.columns)] + list(dp.columns[2:])
+    mapa = {}
+    for cod, novo in zip(dp['codigo'], dp['novo']):
+        mapa[cod.strip().upper()] = _sem_regional(novo).upper()
+    for cod, alvo in CODIGOS_EXTRAS.items():
+        if alvo.upper() in mapa: mapa[cod.upper()] = mapa[alvo.upper()]
+    return mapa
+
+@st.cache_data
+def carregar_matrizes():
+    """Franquia (sem regional) -> nome do grupo no dashboard, a partir do Matriz_Franquias.xlsx."""
+    if not os.path.exists(ARQ_MATRIZES): return {}
+    mt = pd.read_excel(ARQ_MATRIZES, dtype=str)
+    mapa = {}
+    for fr, nome in zip(mt['Franquia'], mt['Nome no dashboard']):
+        if isinstance(fr, str) and fr.strip():
+            mapa[fr.strip().upper()] = nome.strip() if isinstance(nome, str) and nome.strip() else fr.strip().upper()
+    return mapa
+
+@st.cache_data
+def carregar_regional_por_ticket():
+    """Franquia e regional reais por ticket (Salesforce / aprovados), arquivo sem dados pessoais."""
+    arq = 'Franquia_Regional_por_ticket.xlsx'
+    if not os.path.exists(arq): return pd.DataFrame(columns=['Id HugMe', 'Franquia', 'Regional', 'Fonte'])
+    reg = pd.read_excel(arq, dtype={'Franquia': str, 'Regional': str, 'Fonte': str})
+    reg['Franquia'] = reg['Franquia'].str.strip().str.upper()
+    return reg
+
+def padronizar_franquias(df):
+    """Cria Franquia Unificada / Franquia / Regional e deixa 'Franquias' sem a regional.
+    Aceita o que vier da tag do HugMe: código antigo (FRQ_ECO_...), nome novo com regional
+    (FRQ GALEAO SUL RJ R02) ou nome novo sem regional (FRQ OSASCO SP)."""
+    de_para = carregar_de_para()
+    unif = carregar_matrizes()
+    reg = carregar_regional_por_ticket()
+    reg_por_id = {}
+    for r in reg.itertuples(index=False):
+        reg_por_id.setdefault(r[0], []).append((r[1], r[2] if isinstance(r[2], str) else None, r[3]))
+
+    def ler_tag(valor):
+        if pd.isna(valor) or not str(valor).strip() or str(valor).strip() in ('NÃO INFORMADO', 'NAN'): return None, None
+        v = re.split(r'\s*[;,]\s*', str(valor).strip())[0].strip().upper()  # se vierem 2 tags, vale a primeira
+        if v in de_para: return de_para[v], None
+        return _sem_regional(v), _regional(v)
+
+    fr, rg, un, fonte = [], [], [], []
+    ids = df['Id HugMe'] if 'Id HugMe' in df.columns else pd.Series([None] * len(df), index=df.index)
+    for valor, hid in zip(df['Franquias'], ids):
+        f, r = ler_tag(valor)
+        origem = 'Tag do HugMe' if r else None
+        cand = reg_por_id.get(hid, [])
+        if f is None:
+            # tag vazia: só usa o que foi aprovado na planilha de sugestões
+            aprov = [c for c in cand if c[2].startswith('Aprovado')]
+            if aprov: f, r, origem = aprov[0][0], aprov[0][1], 'Aprovado (sugestões)'
+        elif r is None and cand:
+            # tag sem regional: detalha pelo Salesforce, desde que fique no mesmo grupo unificado
+            grupo = unif.get(f, f)
+            mesmos = [c for c in cand if unif.get(c[0], c[0]) == grupo]
+            if len(mesmos) == 1:
+                f, r, origem = mesmos[0][0], mesmos[0][1], 'Salesforce (CPF)'
+        fr.append(f if f else SEM_FRANQUIA)
+        rg.append(r if r else SEM_REGIONAL)
+        un.append(unif.get(f, f) if f else SEM_FRANQUIA)
+        fonte.append(origem or ('Tag do HugMe (sem regional)' if f else '-'))
+
+    df['Franquia (tag original)'] = df['Franquias']
+    df['Franquia Unificada'] = un
+    df['Franquia'] = fr
+    df['Regional'] = rg
+    df['Franquia + Regional'] = [f if r == SEM_REGIONAL or f == SEM_FRANQUIA else f'{f} {r}' for f, r in zip(fr, rg)]
+    df['Origem da regional'] = fonte
+    # 'Franquias' passa a ser a franquia padronizada (sem regional) em todas as abas
+    df['Franquias'] = [pd.NA if f == SEM_FRANQUIA else f for f in fr]
+    return df
+
+def agregar_franquias(df_in, colunas):
+    return df_in.groupby(colunas).agg(
+        Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'),
+        Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x == 'SIM').mean() * 100),
+        Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x == 'SIM').mean() * 100)
+    ).reset_index()
+
+def mapa_rede(df_in, titulo="Clique numa matriz para abrir as franquias e regionais"):
+    base = df_in[df_in['Franquia Unificada'] != SEM_FRANQUIA]
+    if base.empty: return None
+    gb = agregar_franquias(base, ['Franquia Unificada', 'Franquia', 'Regional'])
+    fig = px.treemap(gb, path=[px.Constant('Rede'), 'Franquia Unificada', 'Franquia', 'Regional'], values='Volume',
+                     color='Franquia Unificada', title=titulo, height=520,
+                     color_discrete_sequence=px.colors.qualitative.Safe)
+    fig.update_traces(textinfo='label+value+percent root', root_color='#f4f6f8',
+                      hovertemplate='<b>%{label}</b><br>Volume: %{value}<br>% da rede: %{percentRoot:.1%}<extra></extra>')
+    fig.update_layout(margin=dict(t=50, l=5, r=5, b=5))
+    return fig
+
 @st.cache_data
 def carregar_dados():
     file_path = 'BaseEco.xlsx'
@@ -262,6 +380,7 @@ def carregar_dados():
         else:
             if col in ['Motivos Ecohouse', 'Franquias']: df[col] = "NÃO INFORMADO"
     df = df.replace('NAN', pd.NA)
+    df = padronizar_franquias(df)
     return df
 
 def renderizar_painel_principal(df_painel, titulo_secao):
@@ -464,7 +583,7 @@ def main():
 
                 st.markdown("##### 📋 Detalhamento: Caso a Caso (com Motivo e Franquia)")
                 cols_detalhe = ['Atribuido Para', 'ID Reclame Aqui', 'Título', 'Data Reclamação',
-                                'Aging (dias)', 'Faixa de Aging', 'Motivos Ecohouse', 'Franquias']
+                                'Aging (dias)', 'Faixa de Aging', 'Motivos Ecohouse', 'Franquia Unificada', 'Franquias', 'Regional']
                 cols_detalhe = [c for c in cols_detalhe if c in df_novo.columns]
                 df_detalhe = df_novo[cols_detalhe].sort_values('Aging (dias)', ascending=False)
 
@@ -642,7 +761,7 @@ def main():
     # --- ABA ANÁLISE POR FRANQUIA (MULTISELECT) ---
     with tab_franquias:
         st.subheader("🏢 Dossiê da Franquia")
-        st.markdown("Selecione uma ou mais franquias. Se deixar vazio, mostrará a **Rede Completa**.")
+        st.markdown("Selecione uma ou mais matrizes (visão unificada) e, se quiser, as franquias de dentro delas. Se deixar vazio, mostrará a **Rede Completa**.")
         
         c_fd1, c_fd2 = st.columns(2)
         d_fran_ini = c_fd1.date_input("Início Período", df['Data Reclamação'].min().date(), key="dfi")
@@ -652,27 +771,55 @@ def main():
         df_fran_time = df.loc[mask_fran_time].copy()
         
         if not df_fran_time.empty:
-            lista_franquias = df_fran_time['Franquias'].dropna().astype(str).unique().tolist()
-            if "NÃO INFORMADO" in lista_franquias: lista_franquias.remove("NÃO INFORMADO")
-            lista_franquias.sort()
-            
-            # MULTISELECT
-            franquias_selecionadas = st.multiselect("📂 Selecione as Franquias:", lista_franquias)
-            
+            # 1º nível: Franquia Unificada | 2º nível (opcional): franquias dentro dos grupos escolhidos
+            lista_unificadas = sorted(u for u in df_fran_time['Franquia Unificada'].dropna().unique() if u != SEM_FRANQUIA)
+            c_sel1, c_sel2 = st.columns(2)
+            unificadas_sel = c_sel1.multiselect("📂 Matriz (visão unificada):", lista_unificadas, key="fran_unif")
+            base_sub = df_fran_time[df_fran_time['Franquia Unificada'].isin(unificadas_sel)] if unificadas_sel else df_fran_time
+            lista_franquias = sorted(f for f in base_sub['Franquia'].dropna().unique() if f != SEM_FRANQUIA)
+            franquias_selecionadas = c_sel2.multiselect("🏢 Franquia (opcional, para abrir a matriz):", lista_franquias, key="fran_sub")
+
             # Lógica de Filtro
-            if not franquias_selecionadas:
-                df_target = df_fran_time.copy() # Vazio = Todas
+            df_target = df_fran_time.copy()  # Vazio = Todas
+            if unificadas_sel:
+                df_target = df_target[df_target['Franquia Unificada'].isin(unificadas_sel)]
+            if franquias_selecionadas:
+                df_target = df_target[df_target['Franquia'].isin(franquias_selecionadas)]
+            selecao = franquias_selecionadas or unificadas_sel
+            if not selecao:
                 titulo_painel = "Status: Rede Completa (Todas)"
+            elif len(selecao) == 1:
+                titulo_painel = f"Status: {selecao[0]}"
             else:
-                df_target = df_fran_time[df_fran_time['Franquias'].isin(franquias_selecionadas)].copy()
-                if len(franquias_selecionadas) == 1:
-                    titulo_painel = f"Status: {franquias_selecionadas[0]}"
-                else:
-                    titulo_painel = f"Status: {len(franquias_selecionadas)} Franquias Selecionadas"
-            
+                titulo_painel = f"Status: {len(selecao)} Franquias Selecionadas"
+            df_target = df_target.copy()
+
             if not df_target.empty:
                 st.markdown("---")
                 renderizar_painel_principal(df_target, titulo_painel)
+
+                st.markdown("##### 🗺️ Mapa da Rede: Matriz › Franquia › Regional")
+                if not carregar_matrizes():
+                    st.warning(f"Arquivo `{ARQ_MATRIZES}` não encontrado: cada franquia aparece como grupo próprio.")
+                fig_mapa = mapa_rede(df_target)
+                if fig_mapa is not None:
+                    st.plotly_chart(fig_mapa, use_container_width=True)
+                sem_fr = int((df_target['Franquia Unificada'] == SEM_FRANQUIA).sum())
+                sem_rg = int(((df_target['Regional'] == SEM_REGIONAL) & (df_target['Franquia Unificada'] != SEM_FRANQUIA)).sum())
+                st.caption(f"Clique num bloco para abrir e no topo do mapa para voltar. {sem_fr} caso(s) sem franquia ficam fora do mapa. "
+                           f"{sem_rg} caso(s) não têm regional identificada (tag antiga e CPF fora da base ativa do Salesforce).")
+
+                st.markdown("##### 📑 Abertura por Franquia e Regional")
+                gb_hier = agregar_franquias(df_target[df_target['Franquia Unificada'] != SEM_FRANQUIA],
+                                            ['Franquia Unificada', 'Franquia', 'Regional'])
+                if not gb_hier.empty:
+                    tot_unif = gb_hier.groupby('Franquia Unificada')['Volume'].transform('sum')
+                    gb_hier = gb_hier.assign(_t=tot_unif).sort_values(['_t', 'Franquia Unificada', 'Volume'], ascending=[False, True, False]).drop(columns='_t')
+                    st.dataframe(gb_hier.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'),
+                                 use_container_width=True, hide_index=True)
+                    st.download_button(label="📥 Baixar Abertura por Franquia e Regional (XLSX)", data=converter_para_excel(gb_hier),
+                                       file_name='abertura_franquia_regional.xlsx',
+                                       mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key="dl_fran_hier")
                 
                 c_g1, c_g2 = st.columns(2)
                 with c_g1:
@@ -720,6 +867,9 @@ def main():
         df_analise = df.loc[mask_mot].copy()
 
         if 'Motivos Ecohouse' in df_analise.columns and 'Franquias' in df_analise.columns:
+            opcoes_grupo = {"Matriz (visão unificada)": 'Franquia Unificada', "Franquia": 'Franquias', "Franquia + Regional": 'Franquia + Regional'}
+            nivel_fran = st.radio("🏢 Agrupar franquias por:", list(opcoes_grupo.keys()), horizontal=True, key="nivel_fran_analise")
+            col_fran = opcoes_grupo[nivel_fran]
             st.markdown("---")
             st.markdown("### 1. Visão por Motivos (Drill-down)")
             
@@ -748,11 +898,11 @@ def main():
                     )
                 else:
                     df_filtered = df_analise[df_analise['Motivos Ecohouse'] == filtro_motivo]
-                    gb_drilldown = df_filtered.groupby('Franquias').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
+                    gb_drilldown = df_filtered[df_filtered['Franquia Unificada'] != SEM_FRANQUIA].groupby(col_fran).agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
                     st.markdown(f"##### 🏢 Franquias com reclamações de: **{filtro_motivo}**")
                     st.dataframe(gb_drilldown.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Reds'), use_container_width=True, height=400)
                     dados_grafico = gb_drilldown.head(10)
-                    coluna_grafico = 'Franquias'
+                    coluna_grafico = col_fran
                     titulo_grafico = f"Top Franquias em: {filtro_motivo}"
                     
                     # --- BOTÃO DOWNLOAD: Drill-down Motivo ---
@@ -773,7 +923,7 @@ def main():
 
             st.markdown("---") 
             st.markdown("### 2. Ranking Geral de Franquias (Volume Total)")
-            gb_fran_geral = df_analise.groupby('Franquias').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
+            gb_fran_geral = df_analise[df_analise['Franquia Unificada'] != SEM_FRANQUIA].groupby(col_fran).agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
             st.dataframe(gb_fran_geral.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True)
             
             # --- BOTÃO DOWNLOAD: Ranking Geral de Franquias ---

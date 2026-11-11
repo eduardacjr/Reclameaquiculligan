@@ -1,0 +1,18 @@
+# Arquivos com dados de clientes que NÃO devem subir para o GitHub
+# (o dashboard RA.py usa BaseEco.xlsx, De-Para.xlsx, Matriz_Franquias.xlsx e Franquia_Regional_por_ticket.xlsx)
+
+# Base ativa exportada do Salesforce (CPF, telefone, e-mail)
+base_automatizada_salesforce*.csv
+
+# Relatório de ordens de serviço / Casos por asset
+relatorio_ordens_servico*.xlsx
+
+# Planilhas de apoio geradas na padronização de franquias
+Sugestao_Franquias*.xlsx
+
+# Cadastro de Prestador de Serviço (tem contatos das franquias); o dash usa só o Matriz_Franquias.xlsx
+Prestador_de_Servi*.csv
+*Prestador_de_Servi*.csv
+
+# Arquivos temporários do Excel (aparecem quando uma planilha está aberta)
+~$*
