@@ -16,3 +16,6 @@ Prestador_de_Servi*.csv
 
 # Arquivos temporários do Excel (aparecem quando uma planilha está aberta)
 ~$*
+
+# Estudos e análises pontuais (trazem trechos das reclamações)
+Estudo_*.xlsx

@@ -360,14 +360,79 @@ def mapa_rede(df_in, titulo="Clique numa matriz para abrir as franquias e region
     fig.update_layout(margin=dict(t=50, l=5, r=5, b=5))
     return fig
 
+# --- MEMÓRIA DE TAGS DO HUGME ---
+# Em 12/11/2026 as tags antigas de franquia, marca e cancelamento foram removidas dos tickets no HugMe,
+# e a exportação passou a vir com essas colunas vazias. Memoria_Tags_HugMe.xlsx guarda, por Id HugMe,
+# o último valor conhecido (sem dados pessoais) e completa só o que vier vazio na Base Eco.
+ARQ_MEMORIA = 'Memoria_Tags_HugMe.xlsx'
+COLS_MEMORIA = ['Franquias', 'cancelamento', 'Marca']
+_RE_TAG_FRANQUIA = re.compile(r'^(FRQ|AT)[ _]', re.IGNORECASE)
+
+@st.cache_data
+def carregar_memoria_tags():
+    if not os.path.exists(ARQ_MEMORIA): return pd.DataFrame()
+    mem = pd.read_excel(ARQ_MEMORIA, dtype={c: str for c in COLS_MEMORIA + ['Tag de franquia original']})
+    mem['Id HugMe'] = pd.to_numeric(mem['Id HugMe'], errors='coerce').astype('Int64')
+    return mem.dropna(subset=['Id HugMe']).drop_duplicates('Id HugMe', keep='last').set_index('Id HugMe')
+
+def _vazio(serie):
+    txt = serie.astype(str).str.strip().str.upper()
+    return serie.isna() | txt.isin(['', 'NAN', 'NONE', 'NÃO INFORMADO'])
+
+def _franquia_nas_tags(tags):
+    """Se a tag de franquia vier na coluna Tags (outra categoria no HugMe), pega a primeira."""
+    if pd.isna(tags): return None
+    for t in re.split(r'\s*;\s*', str(tags)):
+        if _RE_TAG_FRANQUIA.match(t.strip()): return t.strip()
+    return None
+
+def completar_com_memoria(df):
+    """Completa Franquias / cancelamento / Marca vazios: 1º pela coluna Tags, 2º pela memória (Id HugMe)."""
+    for col in COLS_MEMORIA:
+        df[col] = df[col].astype(object) if col in df.columns else pd.Series([pd.NA] * len(df), index=df.index, dtype=object)
+    vazio = _vazio(df['Franquias'])
+    if 'Tags' in df.columns:
+        achadas = df.loc[vazio, 'Tags'].map(_franquia_nas_tags)
+        df.loc[achadas.dropna().index, 'Franquias'] = achadas.dropna()
+    df['Franquia pela memória'] = 'Não'
+    mem = carregar_memoria_tags()
+    if mem.empty or 'Id HugMe' not in df.columns: return df
+    ids = df['Id HugMe'].astype('Int64')
+    for col in COLS_MEMORIA:
+        if col not in mem.columns: continue
+        vazio = _vazio(df[col])
+        valores = ids[vazio].map(mem[col]).dropna()
+        df.loc[valores.index, col] = valores
+        if col == 'Franquias': df.loc[valores.index, 'Franquia pela memória'] = 'Sim'
+    return df
+
+def memoria_atualizada(df):
+    """Memória atual + tags que vieram nesta Base Eco (o valor da exportação vence)."""
+    mem = carregar_memoria_tags()
+    mem = mem.reset_index() if not mem.empty else pd.DataFrame(columns=['Id HugMe'])
+    novo = pd.DataFrame({
+        'Id HugMe': df['Id HugMe'].astype('Int64'), 'Data Reclamação': df['Data Reclamação'],
+        'Franquias': [f if (m == 'Não' and isinstance(t, str) and isinstance(f, str)) else pd.NA
+                      for f, t, m in zip(df['Franquias'], df['Franquia (tag original)'], df['Franquia pela memória'])],
+        'Tag de franquia original': [t if (m == 'Não' and isinstance(t, str)) else pd.NA for t, m in zip(df['Franquia (tag original)'], df['Franquia pela memória'])],
+        'cancelamento': df['cancelamento'], 'Marca': df['Marca'],
+        'Capturado da base de': datetime.now().strftime('%d/%m/%Y')})
+    novo = novo[novo[COLS_MEMORIA].notna().any(axis=1)]
+    junto = pd.concat([mem, novo], ignore_index=True)
+    # por ticket: fica o último valor não vazio de cada coluna
+    final = junto.groupby('Id HugMe', sort=False).agg(lambda x: x.dropna().iloc[-1] if x.notna().any() else pd.NA).reset_index()
+    return final.sort_values('Data Reclamação')
+
 @st.cache_data
 def carregar_dados():
     file_path = 'BaseEco.xlsx'
     if not os.path.exists(file_path): return None
     df = pd.read_excel(file_path)
+    df = completar_com_memoria(df)
     df['Data Reclamação'] = pd.to_datetime(df['Data Reclamação'])
     if 'Data de Resposta' in df.columns:
-        df['Data de Resposta'] = pd.to_datetime(df['Data de Resposta'], errors='coerce')
+        # também vem como número serial do Excel no HugMe (antes virava 1970 e o tempo médio dava negativo)
+        df['Data de Resposta'] = df['Data de Resposta'].map(converter_data_avaliacao)
     if 'Data Avaliacao' in df.columns:
         df['Data Avaliacao'] = df['Data Avaliacao'].map(converter_data_avaliacao)
     if 'Status Hugme' in df.columns:
@@ -435,6 +500,10 @@ def main():
         st.markdown(f"<div style='text-align: right; padding-top: 15px; color: #888; font-size: 0.8rem;'>📅 {hoje_str}</div>", unsafe_allow_html=True)
 
     ini_oficial, fim_oficial, ini_previa, fim_previa = get_periodos_ra(df)
+    n_memoria = int((df['Franquia pela memória'] == 'Sim').sum())
+    if n_memoria:
+        st.caption(f"🧠 {n_memoria} tickets vieram sem tag de franquia na Base Eco e foram completados pela memória de tags. "
+                   f"{int((df['Franquia Unificada'] == SEM_FRANQUIA).sum())} seguem sem franquia. Detalhes na aba 📂 Base Completa.")
 
     tab_oficial, tab_previa, tab_mensal, tab_operador, tab_notas, tab_franquias, tab_analises, tab_quali, tab_simulador, tab_avancada, tab_dados = st.tabs([
         "🔒 Visão Oficial", "⚡ Visão Prévia", "📅 Evolução Mensal", "👥 Visão por Operador", "⭐ Visão de Notas",
@@ -1146,6 +1215,18 @@ def main():
 
     with tab_dados:
         st.subheader("📂 Base de Dados")
+        with st.expander("🧠 Memória de tags do HugMe (franquia, cancelamento e marca)"):
+            mem_atual = carregar_memoria_tags()
+            n_mem = int((df['Franquia pela memória'] == 'Sim').sum())
+            n_sem = int((df['Franquia Unificada'] == SEM_FRANQUIA).sum())
+            st.markdown("Guarda o último valor conhecido de cada ticket, para o dash não perder a informação quando a tag some do HugMe. "
+                        f"Na base atual: **{n_mem}** franquias vieram da memória · **{len(df) - n_mem - n_sem}** vieram da própria Base Eco "
+                        f"ou das sugestões aprovadas · **{n_sem}** sem franquia. Tickets na memória: **{len(mem_atual)}**.")
+            st.markdown("**Para manter a memória em dia:** depois de trocar a Base Eco, baixe o arquivo abaixo, salve por cima de "
+                        f"`{ARQ_MEMORIA}` na pasta do dash e rode o Atualizar RA.")
+            mem_nova = memoria_atualizada(df)
+            st.download_button(label=f"📥 Baixar memória atualizada ({len(mem_nova)} tickets)", data=converter_para_excel(mem_nova),
+                               file_name=ARQ_MEMORIA, mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key="dl_memoria")
         search_id = st.text_input("🔍 Pesquisar por ID Origem ou ID Reclame Aqui:", placeholder="Digite o ID e pressione Enter")
         df_display = df.copy()
         if search_id:
