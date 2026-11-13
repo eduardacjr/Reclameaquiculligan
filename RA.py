@@ -250,7 +250,7 @@ ARQ_MATRIZES = 'Matriz_Franquias.xlsx'
 # Códigos antigos que aparecem na Base Eco mas não estão no De-Para.xlsx
 CODIGOS_EXTRAS = {'FRQ_ECO_SP_SÃO_PAULO_2': 'FRQ_ECOHOUSE SÃO PAULO_2', 'FRQ_ECO_SP_ZONA_NORTE_2': 'FRQ_ECO_SP_Z_NORTE_2'}
 SEM_FRANQUIA = 'Sem franquia'
-SEM_REGIONAL = 'Regional não informada'
+SEM_REGIONAL = ''  # regional não identificada fica em branco (não aparece no mapa nem nas tabelas)
 _RE_REGIONAL = re.compile(r'\s+(R\d+(?:\s*-\s*MATRIZ)?)\s*$')
 
 def _sem_regional(nome):
@@ -351,13 +351,23 @@ def agregar_franquias(df_in, colunas):
 def mapa_rede(df_in, titulo="Clique numa matriz para abrir as franquias e regionais"):
     base = df_in[df_in['Franquia Unificada'] != SEM_FRANQUIA]
     if base.empty: return None
-    gb = agregar_franquias(base, ['Franquia Unificada', 'Franquia', 'Regional'])
-    fig = px.treemap(gb, path=[px.Constant('Rede'), 'Franquia Unificada', 'Franquia', 'Regional'], values='Volume',
-                     color='Franquia Unificada', title=titulo, height=520,
-                     color_discrete_sequence=px.colors.qualitative.Safe)
-    fig.update_traces(textinfo='label+value+percent root', root_color='#f4f6f8',
-                      hovertemplate='<b>%{label}</b><br>Volume: %{value}<br>% da rede: %{percentRoot:.1%}<extra></extra>')
-    fig.update_layout(margin=dict(t=50, l=5, r=5, b=5))
+    # montado nó a nó: a franquia mostra o total; regional só aparece quando identificada
+    # (o que não tem regional fica como espaço da própria franquia, sem rótulo)
+    ids, labels, parents, values, colors = ['Rede'], ['Rede'], [''], [len(base)], ['#f4f6f8']
+    paleta = px.colors.qualitative.Safe
+    for i, (m, g_m) in enumerate(sorted(base.groupby('Franquia Unificada'), key=lambda x: -len(x[1]))):
+        cor = paleta[i % len(paleta)]
+        id_m = f'Rede/{m}'
+        ids.append(id_m); labels.append(m); parents.append('Rede'); values.append(len(g_m)); colors.append(cor)
+        for f, g_f in g_m.groupby('Franquia'):
+            id_f = f'{id_m}/{f}'
+            ids.append(id_f); labels.append(f); parents.append(id_m); values.append(len(g_f)); colors.append(cor)
+            for r, g_r in g_f[g_f['Regional'] != SEM_REGIONAL].groupby('Regional'):
+                ids.append(f'{id_f}/{r}'); labels.append(r); parents.append(id_f); values.append(len(g_r)); colors.append(cor)
+    fig = go.Figure(go.Treemap(ids=ids, labels=labels, parents=parents, values=values, branchvalues='total',
+                               marker=dict(colors=colors), textinfo='label+value+percent root',
+                               hovertemplate='<b>%{label}</b><br>Volume: %{value}<br>% da rede: %{percentRoot:.1%}<extra></extra>'))
+    fig.update_layout(title=titulo, height=520, margin=dict(t=50, l=5, r=5, b=5))
     return fig
 
 # --- MEMÓRIA DE TAGS DO HUGME ---
@@ -446,6 +456,7 @@ def carregar_dados():
             if col in ['Motivos Ecohouse', 'Franquias']: df[col] = "NÃO INFORMADO"
     df = df.replace('NAN', pd.NA)
     df = padronizar_franquias(df)
+    df = aplicar_classificacao(df)
     return df
 
 def renderizar_painel_principal(df_painel, titulo_secao):
@@ -487,6 +498,324 @@ def renderizar_painel_principal(df_painel, titulo_secao):
     return kpis
 
 # --- APP PRINCIPAL ---
+# ===================== MOTIVOS RA: CATEGORIA E SUBCATEGORIA (leitura caso a caso) =====================
+# A classificação não vem do HugMe: fica no arquivo Classificacao_Motivos_RA.xlsx (sem dados pessoais),
+# atualizado toda semana com os casos novos. O dash cruza pelo Id HugMe.
+ARQ_CLASSIFICACAO = 'Classificacao_Motivos_RA.xlsx'
+AGUARDANDO = 'Aguardando classificação'
+ORDEM_CATEGORIAS = ['Cancelamento', 'Financeiro', 'Campo', 'Processo e sistemas', 'Atendimento', 'Produto', 'Comercial', 'Outros']
+# cor fixa por categoria (não muda com filtro); "aguardando" fica em cinza
+COR_CATEGORIA = {'Cancelamento': '#2a78d6', 'Financeiro': '#eb6834', 'Campo': '#1baf7a', 'Processo e sistemas': '#eda100',
+                 'Atendimento': '#e87ba4', 'Produto': '#008300', 'Comercial': '#6250d6', 'Outros': '#e34948', AGUARDANDO: '#b5b4ad'}
+COLS_CLASSIF = {'Categoria': 'Categoria Motivo', 'Subcategoria': 'Subcategoria Motivo', 'Categoria secundária': 'Categoria Secundária',
+                'Tipo de serviço (campo)': 'Serviço de Campo', 'Motivo de origem (cancelamento)': 'Origem do Cancelamento'}
+COLS_LISTA_MOTIVOS = ['Id HugMe', 'ID Reclame Aqui', 'Data Reclamação', 'Título', 'Franquia Unificada', 'Franquia',
+                      'Categoria Motivo', 'Subcategoria Motivo', 'Categoria Secundária', 'Serviço de Campo', 'Origem do Cancelamento',
+                      'Status RA', 'Nota', 'Seu problema foi resolvido?', 'Voltaria a fazer negócio?']
+FMT_MOTIVOS = {'% do total': '{:.1f}%', '% na categoria': '{:.1f}%', 'Nota média': '{:.2f}', '% Resolvido': '{:.1f}%', '% Voltaria': '{:.1f}%', '%': '{:.0f}%'}
+
+@st.cache_data
+def carregar_classificacao():
+    if not os.path.exists(ARQ_CLASSIFICACAO): return None
+    cl = pd.read_excel(ARQ_CLASSIFICACAO, sheet_name='Classificação')
+    cl['Id HugMe'] = pd.to_numeric(cl['Id HugMe'], errors='coerce').astype('Int64')
+    cl = cl.dropna(subset=['Id HugMe']).drop_duplicates('Id HugMe', keep='last')
+    return cl
+
+def aplicar_classificacao(df):
+    df = df.drop(columns=[c for c in COLS_CLASSIF.values() if c in df.columns])
+    cl = carregar_classificacao()
+    if cl is None:
+        for c in COLS_CLASSIF.values(): df[c] = pd.NA
+    else:
+        mapa = cl.set_index('Id HugMe')
+        ids = pd.to_numeric(df['Id HugMe'], errors='coerce').astype('Int64')
+        for origem, destino in COLS_CLASSIF.items():
+            df[destino] = ids.map(mapa[origem]).values if origem in mapa.columns else pd.NA
+    df['Categoria Motivo'] = df['Categoria Motivo'].fillna(AGUARDANDO)
+    return df
+
+def ultima_leitura_classificacao():
+    cl = carregar_classificacao()
+    if cl is None or 'Classificado em' not in cl.columns: return ''
+    datas = pd.to_datetime(cl['Classificado em'].astype(str), dayfirst=True, errors='coerce')
+    return datas.max().strftime('%d/%m/%Y') if datas.notna().any() else ''
+
+def _fmt_motivos(tabela):
+    return tabela.style.format({k: v for k, v in FMT_MOTIVOS.items() if k in tabela.columns}, na_rep='-')
+
+def _resumo_motivos(df_in, colunas):
+    out = df_in.groupby(colunas).size().rename('Volume').to_frame()
+    av = df_in.dropna(subset=['Nota'])
+    ga = av.groupby(colunas)
+    out['Avaliadas'] = ga.size()
+    out['Nota média'] = ga['Nota'].mean()
+    out['% Resolvido'] = ga['Seu problema foi resolvido?'].apply(lambda x: (x == 'SIM').mean() * 100)
+    out['% Voltaria'] = ga['Voltaria a fazer negócio?'].apply(lambda x: (x == 'SIM').mean() * 100)
+    out['Avaliadas'] = out['Avaliadas'].fillna(0).astype(int)
+    return out.reset_index()
+
+def _contagem(serie, nome):
+    vc = serie.value_counts()
+    return pd.DataFrame({nome: vc.index, 'Qtd': vc.values, '%': vc.values / max(vc.sum(), 1) * 100})
+
+def _semana_seg(datas):
+    d = datas.dt.normalize()
+    return (d - pd.to_timedelta(d.dt.weekday, unit='D')).dt.date
+
+def _rotulo_semana(seg):
+    return f"{seg:%d/%m}–{(seg + timedelta(days=6)):%d/%m}"
+
+def excel_varias_abas(abas):
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        for nome, tabela in abas.items():
+            aba = nome[:31]
+            tabela.to_excel(writer, index=False, sheet_name=aba)
+            ws = writer.sheets[aba]
+            for col in ws.columns:
+                maior = max((len(str(c.value)) for c in col if c.value is not None), default=8)
+                ws.column_dimensions[col[0].column_letter].width = min(60, max(10, maior + 2))
+            ws.freeze_panes = 'A2'
+    return buffer.getvalue()
+
+def _barras_horizontais(tabela, col_y, cor=None, col_cor=None, altura=340):
+    fig = px.bar(tabela, x='Volume', y=col_y, orientation='h', text='Rótulo',
+                 color=col_cor, color_discrete_map=COR_CATEGORIA if col_cor else None)
+    fig.update_traces(textposition='outside', textfont_color='#333', cliponaxis=False,
+                      hovertemplate='%{y}<br>%{x} reclamações<extra></extra>')
+    if cor: fig.update_traces(marker_color=cor)
+    fig.update_layout(showlegend=False, yaxis={'categoryorder': 'total ascending', 'title': None}, xaxis_title=None, bargap=0.35)
+    fig.update_xaxes(range=[0, tabela['Volume'].max() * 1.25])
+    fig = estilizar_grafico(fig, altura)
+    fig.update_yaxes(automargin=True)
+    fig.update_xaxes(automargin=True)
+    return fig
+
+def renderizar_motivos_ra(df):
+    st.subheader("🗂️ Motivos RA: categoria e subcategoria")
+    if carregar_classificacao() is None:
+        st.warning(f"Arquivo `{ARQ_CLASSIFICACAO}` não encontrado na pasta do dash: todas as reclamações aparecem como '{AGUARDANDO}'.")
+    ult = ultima_leitura_classificacao()
+    st.markdown("<div class='explanation-box'><b>📌 Como ler esta aba</b><br>"
+                "Cada reclamação foi lida (título e texto) e recebeu <b>1 categoria e 1 subcategoria</b>: o que o cliente precisa que seja resolvido. "
+                "Quando ele relata outro problema junto, ele entra na <b>categoria secundária</b>. A classificação não usa a tag de motivo da operação."
+                + (f"<br><i>Última leitura: {ult}. O que entrou na Base Eco depois disso aparece como <b>{AGUARDANDO}</b>.</i>" if ult else "")
+                + "</div>", unsafe_allow_html=True)
+
+    # ---------- período ----------
+    hoje = datetime.now().date()
+    seg_atual = hoje - timedelta(days=hoje.weekday())
+    ini_of, fim_of, ini_pv, fim_pv = get_periodos_ra(df)
+    d_min, d_max = df['Data Reclamação'].min().date(), df['Data Reclamação'].max().date()
+    periodos = {
+        'Todo o período': (d_min, d_max),
+        'Janela oficial (6 meses fechados)': (ini_of, fim_of),
+        'Prévia (próxima reputação)': (ini_pv, fim_pv),
+        'Mês atual': (hoje.replace(day=1), hoje),
+        'Últimas 4 semanas fechadas': (seg_atual - timedelta(days=28), seg_atual - timedelta(days=1)),
+        'Última semana fechada (seg a dom)': (seg_atual - timedelta(days=7), seg_atual - timedelta(days=1)),
+        'Semana atual': (seg_atual, hoje),
+        'Personalizado': None,
+    }
+    c_p1, c_p2, c_p3 = st.columns([2, 1, 1])
+    escolha = c_p1.selectbox("📅 Período:", list(periodos), key='mot_periodo')
+    if periodos[escolha] is None:
+        ini = c_p2.date_input("Início", d_min, key='mot_ini')
+        fim = c_p3.date_input("Fim", d_max, key='mot_fim')
+    else:
+        ini, fim = periodos[escolha]
+        c_p2.markdown(f"<div style='padding-top: 34px; color: #52514e;'>{ini:%d/%m/%Y} a {fim:%d/%m/%Y}</div>", unsafe_allow_html=True)
+    dfp = df[(df['Data Reclamação'].dt.date >= ini) & (df['Data Reclamação'].dt.date <= fim)].copy()
+    if dfp.empty:
+        st.info("Sem reclamações no período selecionado.")
+        return
+
+    total = len(dfp)
+    n_aguard = int((dfp['Categoria Motivo'] == AGUARDANDO).sum())
+    dcl = dfp[dfp['Categoria Motivo'] != AGUARDANDO]
+    res_cat = _resumo_motivos(dfp, ['Categoria Motivo']).sort_values('Volume', ascending=False)
+    res_cat['% do total'] = res_cat['Volume'] / total * 100
+    ordem = res_cat.loc[res_cat['Categoria Motivo'] != AGUARDANDO, 'Categoria Motivo'].tolist()
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Reclamações no período", f"{total}")
+    k2.metric("Classificadas", f"{len(dcl)}", f"{len(dcl) / total * 100:.0f}% do período", delta_color='off')
+    if ordem:
+        top = res_cat[res_cat['Categoria Motivo'] == ordem[0]].iloc[0]
+        k3.metric("Maior categoria", ordem[0], f"{top['% do total']:.0f}% das reclamações", delta_color='off')
+    k4.metric(AGUARDANDO, f"{n_aguard}")
+    if n_aguard:
+        st.warning(f"⏳ {n_aguard} reclamação(ões) deste período ainda não foram lidas. Elas entram na próxima classificação semanal.")
+    area_download = st.container()
+    abas_relatorio = {}
+
+    # ---------- 1. categorias ----------
+    st.markdown("---")
+    st.markdown("### 1. Categorias")
+    c1, c2 = st.columns([1, 1.25])
+    with c1:
+        graf = res_cat.copy()
+        graf['Rótulo'] = graf['Volume'].astype(str) + ' (' + graf['% do total'].round(0).astype(int).astype(str) + '%)'
+        st.plotly_chart(_barras_horizontais(graf, 'Categoria Motivo', col_cor='Categoria Motivo', altura=max(280, 40 * len(graf) + 60)),
+                        use_container_width=True)
+    with c2:
+        tab_cat = res_cat[['Categoria Motivo', 'Volume', '% do total', 'Avaliadas', 'Nota média', '% Resolvido', '% Voltaria']]
+        st.dataframe(_fmt_motivos(tab_cat), use_container_width=True, hide_index=True)
+        st.caption("Nota média, % resolvido e % voltaria consideram só as reclamações que o cliente já avaliou.")
+    abas_relatorio['Categorias'] = tab_cat
+
+    # ---------- 2. quebra ----------
+    st.markdown("---")
+    st.markdown("### 2. Quebra das categorias")
+    res_sub = pd.DataFrame()
+    if dcl.empty:
+        st.info("Nenhuma reclamação classificada neste período.")
+    else:
+        res_sub = _resumo_motivos(dcl, ['Categoria Motivo', 'Subcategoria Motivo'])
+        res_sub['% na categoria'] = res_sub['Volume'] / res_sub.groupby('Categoria Motivo')['Volume'].transform('sum') * 100
+        res_sub['% do total'] = res_sub['Volume'] / total * 100
+        res_sub['_o'] = res_sub['Categoria Motivo'].map({c: i for i, c in enumerate(ordem)})
+        res_sub = res_sub.sort_values(['_o', 'Volume'], ascending=[True, False]).drop(columns='_o')
+        res_sub = res_sub[['Categoria Motivo', 'Subcategoria Motivo', 'Volume', '% na categoria', '% do total', 'Avaliadas', 'Nota média', '% Resolvido', '% Voltaria']]
+
+        cat_sel = st.selectbox("🔎 Abrir a categoria:", ordem, key='mot_cat')
+        sub_sel = res_sub[res_sub['Categoria Motivo'] == cat_sel].copy()
+        base_cat = dcl[dcl['Categoria Motivo'] == cat_sel]
+        c3, c4 = st.columns([1.5, 1])
+        with c3:
+            sub_sel['Rótulo'] = sub_sel['Volume'].astype(str) + ' (' + sub_sel['% na categoria'].round(0).astype(int).astype(str) + '%)'
+            st.plotly_chart(_barras_horizontais(sub_sel, 'Subcategoria Motivo', cor=COR_CATEGORIA.get(cat_sel, '#2a78d6'),
+                                                altura=max(240, 44 * len(sub_sel) + 60)), use_container_width=True)
+            st.dataframe(_fmt_motivos(sub_sel.drop(columns=['Rótulo', 'Categoria Motivo'])), use_container_width=True, hide_index=True)
+        with c4:
+            if cat_sel == 'Cancelamento':
+                st.markdown("##### Já cancelou ou está pedindo?")
+                situacao = base_cat['Subcategoria Motivo'].astype(str).str.split(':').str[0].str.strip()
+                st.dataframe(_fmt_motivos(_contagem(situacao, 'Situação')), use_container_width=True, hide_index=True)
+                st.markdown("##### O que levou ao cancelamento")
+                st.dataframe(_fmt_motivos(_contagem(base_cat['Origem do Cancelamento'].fillna('Não informa'), 'Origem')),
+                             use_container_width=True, hide_index=True)
+            if cat_sel == 'Campo':
+                st.markdown("##### Tipo de serviço")
+                st.dataframe(_fmt_motivos(_contagem(base_cat['Serviço de Campo'].fillna('Não informado'), 'Serviço')),
+                             use_container_width=True, hide_index=True)
+            st.markdown("##### O que mais o cliente relata")
+            st.dataframe(_fmt_motivos(_contagem(base_cat['Categoria Secundária'].fillna('Só esse problema'), 'Também relata')),
+                         use_container_width=True, hide_index=True)
+
+        with st.expander("📋 Quebra completa (todas as categorias e subcategorias)", expanded=False):
+            st.dataframe(_fmt_motivos(res_sub), use_container_width=True, hide_index=True, height=420)
+            st.download_button("📥 Baixar quebra completa (XLSX)", data=converter_para_excel(res_sub), file_name='quebra_motivos_ra.xlsx',
+                               mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key='dl_mot_quebra')
+    abas_relatorio['Subcategorias'] = res_sub
+
+    # ---------- 3. evolução semanal ----------
+    st.markdown("---")
+    st.markdown("### 3. Evolução semanal")
+    n_sem = st.slider("Quantas semanas mostrar (seg a dom, até a semana atual):", 4, 26, 12, key='mot_semanas')
+    semanas = [seg_atual - timedelta(weeks=i) for i in range(n_sem - 1, -1, -1)]
+    dfs = df.assign(Semana=_semana_seg(df['Data Reclamação']))
+    dfs = dfs[(dfs['Semana'] >= semanas[0]) & (dfs['Semana'] <= seg_atual)]
+    rotulos = [_rotulo_semana(s) + (' *' if s == seg_atual else '') for s in semanas]
+    piv = (dfs.groupby(['Categoria Motivo', 'Semana']).size().unstack(fill_value=0)
+              .reindex(columns=semanas, fill_value=0))
+    cats_ev = [c for c in ORDEM_CATEGORIAS + [AGUARDANDO] if c in piv.index] + [c for c in piv.index if c not in ORDEM_CATEGORIAS + [AGUARDANDO]]
+    piv = piv.reindex(cats_ev)
+    fig_ev = go.Figure()
+    for cat in cats_ev:
+        fig_ev.add_trace(go.Bar(x=rotulos, y=piv.loc[cat].values, name=cat, marker_color=COR_CATEGORIA.get(cat, '#8a8985'),
+                                marker_line=dict(color='white', width=2), hovertemplate=f'{cat}<br>%{{x}}: %{{y}}<extra></extra>'))
+    fig_ev.update_layout(barmode='stack', xaxis_title=None, yaxis_title=None, bargap=0.3)
+    fig_ev = estilizar_grafico(fig_ev, 400)
+    fig_ev.update_layout(legend_traceorder='normal')
+    fig_ev.update_xaxes(automargin=True)
+    fig_ev.update_yaxes(automargin=True)
+    st.plotly_chart(fig_ev, use_container_width=True)
+
+    tab_ev = piv.copy()
+    tab_ev.columns = rotulos
+    tab_ev.loc['Total'] = tab_ev.sum()
+    if n_sem >= 3:
+        tab_ev['Δ últ. semana fechada'] = tab_ev[rotulos[-2]] - tab_ev[rotulos[-3]]
+        delta = tab_ev.drop(index=['Total', AGUARDANDO], errors='ignore')['Δ últ. semana fechada']
+        if not delta.empty and delta.max() > 0:
+            st.caption(f"Na última semana fechada ({rotulos[-2]}), a maior alta foi em **{delta.idxmax()}** "
+                       f"(+{int(delta.max())} contra a semana anterior).")
+    tab_ev = tab_ev.reset_index().rename(columns={'index': 'Categoria Motivo', 'Categoria Motivo': 'Categoria Motivo'})
+    st.dataframe(tab_ev, use_container_width=True, hide_index=True)
+    st.caption("* semana atual, ainda em andamento. Esta visão não depende do período escolhido no topo.")
+    abas_relatorio['Evolução semanal'] = tab_ev
+
+    with st.expander("📈 Evolução semanal das subcategorias", expanded=False):
+        cats_disp = [c for c in ORDEM_CATEGORIAS if c in dfs['Categoria Motivo'].unique()]
+        if cats_disp:
+            cat_ev = st.selectbox("Categoria:", cats_disp, key='mot_ev_cat')
+            piv_sub = (dfs[dfs['Categoria Motivo'] == cat_ev].groupby(['Subcategoria Motivo', 'Semana']).size()
+                       .unstack(fill_value=0).reindex(columns=semanas, fill_value=0))
+            piv_sub.columns = rotulos
+            piv_sub['Total'] = piv_sub.sum(axis=1)
+            st.dataframe(piv_sub.sort_values('Total', ascending=False).reset_index(), use_container_width=True, hide_index=True)
+        else:
+            st.info("Sem reclamações classificadas nessas semanas.")
+
+    # ---------- 4. campo por franquia ----------
+    st.markdown("---")
+    st.markdown("### 4. Campo por franquia")
+    cc1, cc2 = st.columns(2)
+    nivel = cc1.radio("Agrupar por:", ['Matriz (visão unificada)', 'Franquia'], horizontal=True, key='mot_campo_nivel')
+    incluir_sec = cc2.checkbox("Incluir quando Campo é a categoria secundária", key='mot_campo_sec',
+                               help="Ex.: cancelamento porque a retirada não foi feita, ou cobrança de um cliente que também está sem visita.")
+    col_f = 'Franquia Unificada' if nivel.startswith('Matriz') else 'Franquia'
+    eh_campo = dcl['Categoria Motivo'] == 'Campo'
+    if incluir_sec:
+        eh_campo = eh_campo | (dcl['Categoria Secundária'] == 'Campo')
+    base_campo = dcl[eh_campo].copy()
+    piv_c = pd.DataFrame()
+    if base_campo.empty:
+        st.info("Nenhuma reclamação de campo no período.")
+    else:
+        base_campo['Coluna'] = base_campo['Subcategoria Motivo'].where(base_campo['Categoria Motivo'] == 'Campo', 'Campo como secundária')
+        sem_fr = int((base_campo['Franquia Unificada'] == SEM_FRANQUIA).sum())
+        bc = base_campo[base_campo['Franquia Unificada'] != SEM_FRANQUIA]
+        if not bc.empty:
+            piv_c = bc.groupby([col_f, 'Coluna']).size().unstack(fill_value=0)
+            piv_c = piv_c[piv_c.sum().sort_values(ascending=False).index]
+            piv_c.insert(0, 'Total', piv_c.sum(axis=1))
+            ind = _resumo_motivos(bc, [col_f]).set_index(col_f)[['Nota média', '% Resolvido']]
+            piv_c = piv_c.join(ind).sort_values('Total', ascending=False).reset_index()
+            st.dataframe(_fmt_motivos(piv_c).background_gradient(subset=['Total'], cmap='Reds'), use_container_width=True, hide_index=True, height=420)
+            st.download_button("📥 Baixar Campo por franquia (XLSX)", data=converter_para_excel(piv_c), file_name='campo_por_franquia.xlsx',
+                               mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key='dl_mot_campo')
+        st.caption(f"{len(base_campo)} reclamações de campo no período"
+                   + (f"; {sem_fr} sem franquia identificada ficam fora da tabela." if sem_fr else "."))
+    abas_relatorio['Campo x Franquia'] = piv_c
+
+    # ---------- 5. casos ----------
+    st.markdown("---")
+    st.markdown("### 5. Casos do período")
+    f1, f2 = st.columns(2)
+    cats_f = f1.multiselect("Categoria:", ordem + ([AGUARDANDO] if n_aguard else []), key='mot_f_cat')
+    base_l = dfp[dfp['Categoria Motivo'].isin(cats_f)] if cats_f else dfp
+    subs_f = f2.multiselect("Subcategoria:", sorted(base_l['Subcategoria Motivo'].dropna().astype(str).unique()), key='mot_f_sub')
+    if subs_f:
+        base_l = base_l[base_l['Subcategoria Motivo'].isin(subs_f)]
+    cols_l = [c for c in COLS_LISTA_MOTIVOS if c in base_l.columns]
+    lista = base_l[cols_l].sort_values('Data Reclamação', ascending=False)
+    st.dataframe(lista, use_container_width=True, hide_index=True, height=380)
+    st.download_button("📥 Baixar casos filtrados (XLSX)", data=converter_para_excel(lista), file_name='casos_motivos_ra.xlsx',
+                       mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key='dl_mot_casos')
+    abas_relatorio['Casos'] = dfp[[c for c in COLS_LISTA_MOTIVOS if c in dfp.columns]].sort_values('Data Reclamação', ascending=False)
+
+    # ---------- relatório do período (fica no topo da aba) ----------
+    resumo = pd.DataFrame({'Item': ['Período', 'Reclamações', 'Classificadas', AGUARDANDO, 'Última leitura', 'Gerado em'],
+                           'Valor': [f"{ini:%d/%m/%Y} a {fim:%d/%m/%Y}", total, len(dcl), n_aguard, ult or '-', datetime.now().strftime('%d/%m/%Y %H:%M')]})
+    with area_download:
+        st.download_button("📥 Baixar relatório do período (XLSX: categorias, quebra, semanas, campo e casos)",
+                           data=excel_varias_abas({'Resumo': resumo, **abas_relatorio}),
+                           file_name=f"motivos_ra_{ini:%d-%m-%Y}_a_{fim:%d-%m-%Y}.xlsx",
+                           mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key='dl_mot_relatorio')
+
 def main():
     df = carregar_dados()
     if df is None:
@@ -505,9 +834,9 @@ def main():
         st.caption(f"🧠 {n_memoria} tickets vieram sem tag de franquia na Base Eco e foram completados pela memória de tags. "
                    f"{int((df['Franquia Unificada'] == SEM_FRANQUIA).sum())} seguem sem franquia. Detalhes na aba 📂 Base Completa.")
 
-    tab_oficial, tab_previa, tab_mensal, tab_operador, tab_notas, tab_franquias, tab_analises, tab_quali, tab_simulador, tab_avancada, tab_dados = st.tabs([
+    tab_oficial, tab_previa, tab_mensal, tab_operador, tab_notas, tab_franquias, tab_analises, tab_motivos, tab_quali, tab_simulador, tab_avancada, tab_dados = st.tabs([
         "🔒 Visão Oficial", "⚡ Visão Prévia", "📅 Evolução Mensal", "👥 Visão por Operador", "⭐ Visão de Notas",
-        "🏢 Análise por Franquia", "📊 Análises Detalhadas", "🔍 Análise Qualitativa",
+        "🏢 Análise por Franquia", "📊 Análises Detalhadas", "🗂️ Motivos RA", "🔍 Análise Qualitativa",
         "🎯 Simulador de Metas", "🔐 Análises Avançadas", "📂 Base Completa"
     ])
 
@@ -867,28 +1196,34 @@ def main():
                 st.markdown("---")
                 renderizar_painel_principal(df_target, titulo_painel)
 
-                st.markdown("##### 🗺️ Mapa da Rede: Matriz › Franquia › Regional")
                 if not carregar_matrizes():
                     st.warning(f"Arquivo `{ARQ_MATRIZES}` não encontrado: cada franquia aparece como grupo próprio.")
-                fig_mapa = mapa_rede(df_target)
-                if fig_mapa is not None:
-                    st.plotly_chart(fig_mapa, use_container_width=True)
-                sem_fr = int((df_target['Franquia Unificada'] == SEM_FRANQUIA).sum())
-                sem_rg = int(((df_target['Regional'] == SEM_REGIONAL) & (df_target['Franquia Unificada'] != SEM_FRANQUIA)).sum())
-                st.caption(f"Clique num bloco para abrir e no topo do mapa para voltar. {sem_fr} caso(s) sem franquia ficam fora do mapa. "
-                           f"{sem_rg} caso(s) não têm regional identificada (tag antiga e CPF fora da base ativa do Salesforce).")
-
-                st.markdown("##### 📑 Abertura por Franquia e Regional")
-                gb_hier = agregar_franquias(df_target[df_target['Franquia Unificada'] != SEM_FRANQUIA],
-                                            ['Franquia Unificada', 'Franquia', 'Regional'])
+                st.markdown("##### 📑 Abertura por Franquia")
+                base_fr = df_target[df_target['Franquia Unificada'] != SEM_FRANQUIA]
+                gb_hier = agregar_franquias(base_fr, ['Franquia Unificada', 'Franquia'])
                 if not gb_hier.empty:
+                    # regionais identificadas viram uma coluna de texto (ex.: "R02 (5) · R04 (5)")
+                    com_rg = base_fr[base_fr['Regional'] != SEM_REGIONAL].groupby(['Franquia Unificada', 'Franquia', 'Regional']).size().reset_index(name='n')
+                    com_rg = com_rg.sort_values('n', ascending=False)
+                    com_rg['txt'] = com_rg['Regional'] + ' (' + com_rg['n'].astype(str) + ')'
+                    regionais = com_rg.groupby(['Franquia Unificada', 'Franquia'])['txt'].agg(' · '.join).reset_index(name='Regionais')
+                    gb_hier = gb_hier.merge(regionais, on=['Franquia Unificada', 'Franquia'], how='left')
+                    gb_hier['Regionais'] = gb_hier['Regionais'].fillna('')
                     tot_unif = gb_hier.groupby('Franquia Unificada')['Volume'].transform('sum')
                     gb_hier = gb_hier.assign(_t=tot_unif).sort_values(['_t', 'Franquia Unificada', 'Volume'], ascending=[False, True, False]).drop(columns='_t')
+                    gb_hier = gb_hier[['Franquia Unificada', 'Franquia', 'Regionais', 'Volume', 'Nota_Media', 'Resolvido_Pct', 'Voltaria_Pct']]
                     st.dataframe(gb_hier.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'),
                                  use_container_width=True, hide_index=True)
-                    st.download_button(label="📥 Baixar Abertura por Franquia e Regional (XLSX)", data=converter_para_excel(gb_hier),
-                                       file_name='abertura_franquia_regional.xlsx',
+                    st.download_button(label="📥 Baixar Abertura por Franquia (XLSX)", data=converter_para_excel(gb_hier),
+                                       file_name='abertura_franquia.xlsx',
                                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key="dl_fran_hier")
+
+                with st.expander("🗺️ Mapa da rede (Matriz › Franquia › Regional)", expanded=False):
+                    fig_mapa = mapa_rede(df_target)
+                    if fig_mapa is not None:
+                        st.plotly_chart(fig_mapa, use_container_width=True)
+                    st.caption(f"Clique num bloco para abrir e no topo do mapa para voltar. "
+                               f"{int((df_target['Franquia Unificada'] == SEM_FRANQUIA).sum())} caso(s) sem franquia ficam fora do mapa.")
                 
                 c_g1, c_g2 = st.columns(2)
                 with c_g1:
@@ -1002,6 +1337,9 @@ def main():
                 file_name='ranking_geral_franquias.xlsx',
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
+
+    with tab_motivos:
+        renderizar_motivos_ra(df)
 
     with tab_quali:
         st.subheader("🔍 Análise Qualitativa Detalhada")

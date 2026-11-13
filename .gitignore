@@ -18,4 +18,7 @@ Prestador_de_Servi*.csv
 ~$*
 
 # Estudos e análises pontuais (trazem trechos das reclamações)
-Estudo_*.xlsx
+Estudo*.xlsx
+
+# Cópias que o app do Claude salva ao baixar arquivos (podem ter a Base Eco)
+Claude outputs/
