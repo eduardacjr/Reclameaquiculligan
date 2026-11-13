@@ -1,0 +1,11 @@
+ARQUIVADOS - arquivos que o dash de R.A nao usa
+
+Guardados aqui em 13/11/2026 para deixar a pasta principal so com o que o dash precisa.
+Nada desta pasta sobe para o GitHub (esta no .gitignore). Nada foi apagado, so mudou de lugar.
+
+- base_automatizada_salesforce.csv: base ativa do Salesforce (tem CPF, telefone e e-mail). Usada em 11/11 para montar o Franquia_Regional_por_ticket.xlsx.
+- relatorio_ordens_servico_atualizado_sucesso.xlsx: relatorio de ordens de servico / casos por asset. Mesma finalidade.
+- Sugestao_Franquias_sem_franquia.xlsx: sugestoes de franquia para os tickets sem franquia (apoio da padronizacao).
+- Claude outputs: copias dos arquivos que o Claude mandou pela conversa. O app pode criar essa pasta de novo na pasta principal quando baixar um arquivo.
+
+Se um dia precisar refazer o Franquia_Regional_por_ticket.xlsx, os arquivos de origem estao aqui.

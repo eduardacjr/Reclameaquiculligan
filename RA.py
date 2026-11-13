@@ -508,10 +508,11 @@ ORDEM_CATEGORIAS = ['Cancelamento', 'Financeiro', 'Campo', 'Processo e sistemas'
 COR_CATEGORIA = {'Cancelamento': '#2a78d6', 'Financeiro': '#eb6834', 'Campo': '#1baf7a', 'Processo e sistemas': '#eda100',
                  'Atendimento': '#e87ba4', 'Produto': '#008300', 'Comercial': '#6250d6', 'Outros': '#e34948', AGUARDANDO: '#b5b4ad'}
 COLS_CLASSIF = {'Categoria': 'Categoria Motivo', 'Subcategoria': 'Subcategoria Motivo', 'Categoria secundária': 'Categoria Secundária',
-                'Tipo de serviço (campo)': 'Serviço de Campo', 'Motivo de origem (cancelamento)': 'Origem do Cancelamento'}
+                'Tipo de serviço (campo)': 'Serviço de Campo', 'Motivo de origem (cancelamento)': 'Origem do Cancelamento',
+                'Já tinha cancelado?': 'Já Tinha Cancelado'}
 COLS_LISTA_MOTIVOS = ['Id HugMe', 'ID Reclame Aqui', 'Data Reclamação', 'Título', 'Franquia Unificada', 'Franquia',
                       'Categoria Motivo', 'Subcategoria Motivo', 'Categoria Secundária', 'Serviço de Campo', 'Origem do Cancelamento',
-                      'Status RA', 'Nota', 'Seu problema foi resolvido?', 'Voltaria a fazer negócio?']
+                      'Já Tinha Cancelado', 'Status RA', 'Nota', 'Seu problema foi resolvido?', 'Voltaria a fazer negócio?']
 FMT_MOTIVOS = {'% do total': '{:.1f}%', '% na categoria': '{:.1f}%', 'Nota média': '{:.2f}', '% Resolvido': '{:.1f}%', '% Voltaria': '{:.1f}%', '%': '{:.0f}%'}
 
 @st.cache_data
@@ -690,10 +691,7 @@ def renderizar_motivos_ra(df):
             st.dataframe(_fmt_motivos(sub_sel.drop(columns=['Rótulo', 'Categoria Motivo'])), use_container_width=True, hide_index=True)
         with c4:
             if cat_sel == 'Cancelamento':
-                st.markdown("##### Já cancelou ou está pedindo?")
-                situacao = base_cat['Subcategoria Motivo'].astype(str).str.split(':').str[0].str.strip()
-                st.dataframe(_fmt_motivos(_contagem(situacao, 'Situação')), use_container_width=True, hide_index=True)
-                st.markdown("##### O que levou ao cancelamento")
+                st.markdown("##### O que levou o cliente a querer cancelar")
                 st.dataframe(_fmt_motivos(_contagem(base_cat['Origem do Cancelamento'].fillna('Não informa'), 'Origem')),
                              use_container_width=True, hide_index=True)
             if cat_sel == 'Campo':
@@ -708,6 +706,17 @@ def renderizar_motivos_ra(df):
             st.dataframe(_fmt_motivos(res_sub), use_container_width=True, hide_index=True, height=420)
             st.download_button("📥 Baixar quebra completa (XLSX)", data=converter_para_excel(res_sub), file_name='quebra_motivos_ra.xlsx',
                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key='dl_mot_quebra')
+
+        # quem já tinha cancelado o contrato quando reclamou (fica nas categorias do problema: cobrança, retirada, estorno)
+        ja = dcl[dcl['Já Tinha Cancelado'].astype(str).str.strip().str.upper() == 'SIM'] if 'Já Tinha Cancelado' in dcl.columns else dcl.iloc[0:0]
+        st.markdown("#### Quem já tinha cancelado o contrato quando reclamou")
+        cj1, cj2 = st.columns([1, 2.5])
+        cj1.metric("Já tinham cancelado", f"{len(ja)}", f"{len(ja) / max(len(dcl), 1) * 100:.0f}% das classificadas", delta_color='off')
+        cj1.caption("Esses clientes não estão em Cancelamento: entram no problema que trouxeram depois de cancelar (cobrança, retirada, estorno).")
+        if not ja.empty:
+            tj = ja.groupby(['Categoria Motivo', 'Subcategoria Motivo']).size().rename('Qtd').reset_index().sort_values('Qtd', ascending=False)
+            tj['%'] = tj['Qtd'] / len(ja) * 100
+            cj2.dataframe(_fmt_motivos(tj), use_container_width=True, hide_index=True)
     abas_relatorio['Subcategorias'] = res_sub
 
     # ---------- 3. evolução semanal ----------
