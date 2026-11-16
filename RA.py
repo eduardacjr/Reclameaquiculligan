@@ -534,6 +534,7 @@ def aplicar_classificacao(df):
         for origem, destino in COLS_CLASSIF.items():
             df[destino] = ids.map(mapa[origem]).values if origem in mapa.columns else pd.NA
     df['Categoria Motivo'] = df['Categoria Motivo'].fillna(AGUARDANDO)
+    df['Subcategoria Motivo'] = df['Subcategoria Motivo'].fillna(AGUARDANDO)
     return df
 
 def ultima_leitura_classificacao():
@@ -768,37 +769,49 @@ def renderizar_motivos_ra(df):
         else:
             st.info("Sem reclamações classificadas nessas semanas.")
 
-    # ---------- 4. campo por franquia ----------
+    # ---------- 4. franquias por motivo ----------
     st.markdown("---")
-    st.markdown("### 4. Campo por franquia")
-    cc1, cc2 = st.columns(2)
-    nivel = cc1.radio("Agrupar por:", ['Matriz (visão unificada)', 'Franquia'], horizontal=True, key='mot_campo_nivel')
-    incluir_sec = cc2.checkbox("Incluir quando Campo é a categoria secundária", key='mot_campo_sec',
-                               help="Ex.: cancelamento porque a retirada não foi feita, ou cobrança de um cliente que também está sem visita.")
-    col_f = 'Franquia Unificada' if nivel.startswith('Matriz') else 'Franquia'
-    eh_campo = dcl['Categoria Motivo'] == 'Campo'
-    if incluir_sec:
-        eh_campo = eh_campo | (dcl['Categoria Secundária'] == 'Campo')
-    base_campo = dcl[eh_campo].copy()
-    piv_c = pd.DataFrame()
-    if base_campo.empty:
-        st.info("Nenhuma reclamação de campo no período.")
+    st.markdown("### 4. Franquias por motivo")
+    TODAS_CAT = 'Todas as categorias'
+    cc1, cc2, cc3 = st.columns([1.2, 1.5, 1.3])
+    cat_fr = cc1.selectbox("Categoria:", [TODAS_CAT] + ordem, key='mot_fr_cat')
+    niveis_fr = {'Matriz (visão unificada)': 'Franquia Unificada', 'Franquia': 'Franquias', 'Franquia + Regional': 'Franquia + Regional'}
+    niveis_fr = {k: v for k, v in niveis_fr.items() if v in dcl.columns}
+    nivel = cc2.radio("Agrupar por:", list(niveis_fr), horizontal=True, key='mot_fr_nivel')
+    col_f = niveis_fr[nivel]
+    incluir_sec = False
+    if cat_fr != TODAS_CAT:
+        incluir_sec = cc3.checkbox(f"Incluir quando {cat_fr} é a categoria secundária", key='mot_fr_sec',
+                                   help="Ex.: cobrança de um cliente que também está sem visita, ou problema que terminou em pedido de cancelamento.")
+    if cat_fr == TODAS_CAT:
+        base_fr = dcl.copy()
+        base_fr['Coluna'] = base_fr['Categoria Motivo']
     else:
-        base_campo['Coluna'] = base_campo['Subcategoria Motivo'].where(base_campo['Categoria Motivo'] == 'Campo', 'Campo como secundária')
-        sem_fr = int((base_campo['Franquia Unificada'] == SEM_FRANQUIA).sum())
-        bc = base_campo[base_campo['Franquia Unificada'] != SEM_FRANQUIA]
+        eh_cat = dcl['Categoria Motivo'] == cat_fr
+        if incluir_sec:
+            eh_cat = eh_cat | (dcl['Categoria Secundária'] == cat_fr)
+        base_fr = dcl[eh_cat].copy()
+        base_fr['Coluna'] = base_fr['Subcategoria Motivo'].where(base_fr['Categoria Motivo'] == cat_fr, f'{cat_fr} como secundária')
+    piv_c = pd.DataFrame()
+    if base_fr.empty:
+        st.info("Nenhuma reclamação nesse filtro no período.")
+    else:
+        sem_fr = int((base_fr['Franquia Unificada'] == SEM_FRANQUIA).sum())
+        bc = base_fr[base_fr['Franquia Unificada'] != SEM_FRANQUIA]
         if not bc.empty:
             piv_c = bc.groupby([col_f, 'Coluna']).size().unstack(fill_value=0)
             piv_c = piv_c[piv_c.sum().sort_values(ascending=False).index]
             piv_c.insert(0, 'Total', piv_c.sum(axis=1))
-            ind = _resumo_motivos(bc, [col_f]).set_index(col_f)[['Nota média', '% Resolvido']]
+            ind = _resumo_motivos(bc, [col_f]).set_index(col_f)[['Avaliadas', 'Nota média', '% Resolvido', '% Voltaria']]
             piv_c = piv_c.join(ind).sort_values('Total', ascending=False).reset_index()
             st.dataframe(_fmt_motivos(piv_c).background_gradient(subset=['Total'], cmap='Reds'), use_container_width=True, hide_index=True, height=420)
-            st.download_button("📥 Baixar Campo por franquia (XLSX)", data=converter_para_excel(piv_c), file_name='campo_por_franquia.xlsx',
+            st.download_button("📥 Baixar Franquias por motivo (XLSX)", data=converter_para_excel(piv_c), file_name='franquias_por_motivo.xlsx',
                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key='dl_mot_campo')
-        st.caption(f"{len(base_campo)} reclamações de campo no período"
-                   + (f"; {sem_fr} sem franquia identificada ficam fora da tabela." if sem_fr else "."))
-    abas_relatorio['Campo x Franquia'] = piv_c
+        st.caption(f"{len(base_fr)} reclamações no filtro"
+                   + (f"; {sem_fr} sem franquia identificada ficam fora da tabela. " if sem_fr else ". ")
+                   + "Colunas do meio: quantidade por " + ("categoria" if cat_fr == TODAS_CAT else "subcategoria")
+                   + ". Nota média, % resolvido e % voltaria consideram só as avaliadas.")
+    abas_relatorio['Franquias x Motivo'] = piv_c
 
     # ---------- 5. casos ----------
     st.markdown("---")
@@ -820,7 +833,7 @@ def renderizar_motivos_ra(df):
     resumo = pd.DataFrame({'Item': ['Período', 'Reclamações', 'Classificadas', AGUARDANDO, 'Última leitura', 'Gerado em'],
                            'Valor': [f"{ini:%d/%m/%Y} a {fim:%d/%m/%Y}", total, len(dcl), n_aguard, ult or '-', datetime.now().strftime('%d/%m/%Y %H:%M')]})
     with area_download:
-        st.download_button("📥 Baixar relatório do período (XLSX: categorias, quebra, semanas, campo e casos)",
+        st.download_button("📥 Baixar relatório do período (XLSX: categorias, quebra, semanas, franquias e casos)",
                            data=excel_varias_abas({'Resumo': resumo, **abas_relatorio}),
                            file_name=f"motivos_ra_{ini:%d-%m-%Y}_a_{fim:%d-%m-%Y}.xlsx",
                            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key='dl_mot_relatorio')
@@ -843,9 +856,9 @@ def main():
         st.caption(f"🧠 {n_memoria} tickets vieram sem tag de franquia na Base Eco e foram completados pela memória de tags. "
                    f"{int((df['Franquia Unificada'] == SEM_FRANQUIA).sum())} seguem sem franquia. Detalhes na aba 📂 Base Completa.")
 
-    tab_oficial, tab_previa, tab_mensal, tab_operador, tab_notas, tab_franquias, tab_analises, tab_motivos, tab_quali, tab_simulador, tab_avancada, tab_dados = st.tabs([
+    tab_oficial, tab_previa, tab_mensal, tab_operador, tab_notas, tab_franquias, tab_motivos, tab_quali, tab_simulador, tab_avancada, tab_dados = st.tabs([
         "🔒 Visão Oficial", "⚡ Visão Prévia", "📅 Evolução Mensal", "👥 Visão por Operador", "⭐ Visão de Notas",
-        "🏢 Análise por Franquia", "📊 Análises Detalhadas", "🗂️ Motivos RA", "🔍 Análise Qualitativa",
+        "🏢 Análise por Franquia", "🗂️ Motivos RA", "🔍 Análise Qualitativa",
         "🎯 Simulador de Metas", "🔐 Análises Avançadas", "📂 Base Completa"
     ])
 
@@ -981,7 +994,7 @@ def main():
                     st.plotly_chart(estilizar_grafico(fig_ag), use_container_width=True)
                 with c_ag2:
                     st.markdown("##### 🚨 Motivos dos Casos Sem Resposta")
-                    top_mot_novo = df_novo['Motivos Ecohouse'].value_counts().reset_index()
+                    top_mot_novo = df_novo['Categoria Motivo'].value_counts().reset_index()
                     top_mot_novo.columns = ['Motivo', 'Casos']
                     fig_mot = px.bar(top_mot_novo.head(8), x='Casos', y='Motivo', orientation='h', text='Casos')
                     fig_mot.update_traces(marker_color='#2a78d6', marker_line_color='white', marker_line_width=2, textposition='outside')
@@ -990,7 +1003,7 @@ def main():
 
                 st.markdown("##### 📋 Detalhamento: Caso a Caso (com Motivo e Franquia)")
                 cols_detalhe = ['Atribuido Para', 'ID Reclame Aqui', 'Título', 'Data Reclamação',
-                                'Aging (dias)', 'Faixa de Aging', 'Motivos Ecohouse', 'Franquia Unificada', 'Franquias', 'Regional']
+                                'Aging (dias)', 'Faixa de Aging', 'Categoria Motivo', 'Subcategoria Motivo', 'Franquia Unificada', 'Franquias', 'Regional']
                 cols_detalhe = [c for c in cols_detalhe if c in df_novo.columns]
                 df_detalhe = df_novo[cols_detalhe].sort_values('Aging (dias)', ascending=False)
 
@@ -1237,8 +1250,8 @@ def main():
                 c_g1, c_g2 = st.columns(2)
                 with c_g1:
                     st.markdown("##### 🚨 Principais Motivos")
-                    if 'Motivos Ecohouse' in df_target.columns:
-                        top_motivos = df_target['Motivos Ecohouse'].value_counts().reset_index()
+                    if 'Categoria Motivo' in df_target.columns:
+                        top_motivos = df_target['Categoria Motivo'].value_counts().reset_index()
                         top_motivos.columns = ['Motivo', 'Qtd']
                         fig_bar = px.bar(top_motivos.head(5), x='Qtd', y='Motivo', orientation='h', height=300)
                         fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
@@ -1267,86 +1280,6 @@ def main():
             st.info("Sem dados no período selecionado.")
 
     # --- ABA ANÁLISES DETALHADAS (COM DRILL-DOWN) ---
-    with tab_analises:
-        st.subheader("🧩 Análise Detalhada: Motivos & Franquias")
-        
-        min_date = df['Data Reclamação'].min().date()
-        max_date = df['Data Reclamação'].max().date()
-        c_m1, c_m2 = st.columns(2)
-        dm_ini = c_m1.date_input("Início (Análises)", min_date, key="dm_ini")
-        dm_fim = c_m2.date_input("Fim (Análises)", max_date, key="dm_fim")
-        
-        mask_mot = (df['Data Reclamação'].dt.date >= dm_ini) & (df['Data Reclamação'].dt.date <= dm_fim)
-        df_analise = df.loc[mask_mot].copy()
-
-        if 'Motivos Ecohouse' in df_analise.columns and 'Franquias' in df_analise.columns:
-            opcoes_grupo = {"Matriz (visão unificada)": 'Franquia Unificada', "Franquia": 'Franquias', "Franquia + Regional": 'Franquia + Regional'}
-            nivel_fran = st.radio("🏢 Agrupar franquias por:", list(opcoes_grupo.keys()), horizontal=True, key="nivel_fran_analise")
-            col_fran = opcoes_grupo[nivel_fran]
-            st.markdown("---")
-            st.markdown("### 1. Visão por Motivos (Drill-down)")
-            
-            lista_motivos_raw = df_analise['Motivos Ecohouse'].dropna().astype(str).unique().tolist()
-            if "NÃO INFORMADO" in lista_motivos_raw: lista_motivos_raw.remove("NÃO INFORMADO")
-            motivos_list = ["Todos (Visão Geral)"] + sorted(lista_motivos_raw)
-            
-            filtro_motivo = st.selectbox("🎯 Selecione um motivo para ver quais Franquias são responsáveis:", options=motivos_list)
-            
-            c1, c2 = st.columns([1.3, 1])
-            with c1:
-                if filtro_motivo == "Todos (Visão Geral)":
-                    gb_motivos = df_analise.groupby('Motivos Ecohouse').agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
-                    st.markdown("##### 📋 Ranking de Motivos (Geral)")
-                    st.dataframe(gb_motivos.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True, height=400)
-                    dados_grafico = gb_motivos.head(10)
-                    coluna_grafico = 'Motivos Ecohouse'
-                    titulo_grafico = "Top 10 Motivos (Volume)"
-                    
-                    # --- BOTÃO DOWNLOAD: Motivos Geral ---
-                    st.download_button(
-                        label="📥 Baixar Ranking de Motivos (XLSX)",
-                        data=converter_para_excel(gb_motivos),
-                        file_name='ranking_motivos.xlsx',
-                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                    )
-                else:
-                    df_filtered = df_analise[df_analise['Motivos Ecohouse'] == filtro_motivo]
-                    gb_drilldown = df_filtered[df_filtered['Franquia Unificada'] != SEM_FRANQUIA].groupby(col_fran).agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
-                    st.markdown(f"##### 🏢 Franquias com reclamações de: **{filtro_motivo}**")
-                    st.dataframe(gb_drilldown.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Reds'), use_container_width=True, height=400)
-                    dados_grafico = gb_drilldown.head(10)
-                    coluna_grafico = col_fran
-                    titulo_grafico = f"Top Franquias em: {filtro_motivo}"
-                    
-                    # --- BOTÃO DOWNLOAD: Drill-down Motivo ---
-                    st.download_button(
-                        label="📥 Baixar Franquias por Motivo (XLSX)",
-                        data=converter_para_excel(gb_drilldown),
-                        file_name=f'motivo_{filtro_motivo}.xlsx',
-                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                    )
-
-            with c2:
-                if not dados_grafico.empty:
-                    fig = px.pie(dados_grafico, values='Volume', names=coluna_grafico, hole=0.4, title=titulo_grafico, color_discrete_sequence=px.colors.sequential.Blues_r)
-                    fig.update_traces(textposition='outside', textinfo='percent+label')
-                    fig.update_layout(showlegend=False, margin=dict(t=40, b=40, l=40, r=40))
-                    st.plotly_chart(fig, use_container_width=True)
-                else: st.info("Sem dados para exibir gráfico.")
-
-            st.markdown("---") 
-            st.markdown("### 2. Ranking Geral de Franquias (Volume Total)")
-            gb_fran_geral = df_analise[df_analise['Franquia Unificada'] != SEM_FRANQUIA].groupby(col_fran).agg(Volume=('ID Reclame Aqui', 'count'), Nota_Media=('Nota', 'mean'), Resolvido_Pct=('Seu problema foi resolvido?', lambda x: (x=='SIM').mean() * 100), Voltaria_Pct=('Voltaria a fazer negócio?', lambda x: (x=='SIM').mean() * 100)).reset_index().sort_values('Volume', ascending=False)
-            st.dataframe(gb_fran_geral.style.format({'Nota_Media': '{:.2f}', 'Resolvido_Pct': '{:.1f}%', 'Voltaria_Pct': '{:.1f}%'}).background_gradient(subset=['Volume'], cmap='Blues'), use_container_width=True)
-            
-            # --- BOTÃO DOWNLOAD: Ranking Geral de Franquias ---
-            st.download_button(
-                label="📥 Baixar Ranking Geral de Franquias (XLSX)",
-                data=converter_para_excel(gb_fran_geral),
-                file_name='ranking_geral_franquias.xlsx',
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            )
-
     with tab_motivos:
         renderizar_motivos_ra(df)
 
@@ -1388,7 +1321,7 @@ def main():
             st.markdown("### 🔬 Detalhamento Cruzado (Drill-down)")
             sel_faixas = st.multiselect("Filtrar Tabela por Faixa de Nota:", faixas, default=faixas)
             df_drill = df_q[df_q['Categoria Nota'].isin(sel_faixas)]
-            gb_drill = df_drill.groupby(['Franquias', 'Motivos Ecohouse']).agg(
+            gb_drill = df_drill.groupby(['Franquias', 'Categoria Motivo', 'Subcategoria Motivo']).agg(
                 Qtd_Casos=('ID Reclame Aqui', 'count'),
                 Resolvido_Sim=('Seu problema foi resolvido?', lambda x: (x=='SIM').sum()),
                 Resolvido_Nao=('Seu problema foi resolvido?', lambda x: (x=='NÃO').sum()),
@@ -1533,8 +1466,8 @@ def main():
                     kpis_ia = calcular_indicadores(df_ia)
                     
                     top_motivos_ruins = pd.DataFrame()
-                    if 'Motivos Ecohouse' in df_ia.columns:
-                        agg_mot = df_ia.groupby('Motivos Ecohouse').agg(Vol=('ID Reclame Aqui','count'), Nota=('Nota','mean')).reset_index().sort_values('Nota', ascending=True)
+                    if 'Subcategoria Motivo' in df_ia.columns:
+                        agg_mot = df_ia.groupby('Subcategoria Motivo').agg(Vol=('ID Reclame Aqui','count'), Nota=('Nota','mean')).reset_index().sort_values('Nota', ascending=True)
                         top_motivos_ruins = agg_mot[agg_mot['Vol']>0].head(5)
                     
                     piores_franquias = pd.DataFrame()
