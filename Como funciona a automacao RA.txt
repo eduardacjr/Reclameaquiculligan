@@ -1,0 +1,50 @@
+﻿COMO FUNCIONA A AUTOMAÇÃO DO DASH DE RECLAME AQUI (RASCUNHO)
+Escrito em 16/11/2026. Pode editar à vontade.
+
+1. O QUE É
+O dash de R.A (arquivo RA.py, publicado pelo GitHub) lê as planilhas desta pasta e monta as visões de reputação, franquias e motivos.
+A aba "Motivos RA" mostra cada reclamação com categoria e subcategoria. Essa classificação não vem do HugMe e não é feita pela operação: o Claude lê o título e o texto de cada reclamação e classifica.
+
+2. OS ARQUIVOS DESTA PASTA
+- BaseEco.xlsx: export do HugMe com todas as reclamações. É o que você atualiza.
+- Classificacao_Motivos_RA.xlsx: categoria e subcategoria de cada reclamação, por Id HugMe. Quem atualiza é o Claude. Não tem dados pessoais.
+- Memoria_Tags_HugMe.xlsx: guarda a franquia dos tickets antigos, porque as tags foram apagadas no HugMe. Não apagar.
+- De-Para.xlsx, Matriz_Franquias.xlsx, Franquia_Regional_por_ticket.xlsx: tabelas de padronização de franquia, matriz e regional.
+- RA.py: o código do dash.
+- Estudo Motivos RA.xlsx: o estudo em Excel para reportar. Não sobe para o GitHub.
+- Atualizar RA.bat: envia a pasta para o GitHub; o dash atualiza sozinho depois.
+- Arquivados: arquivos guardados que o dash não usa. Não sobe para o GitHub.
+
+3. ROTINA SEMANAL (3 PASSOS)
+Passo 1. Atualizar a BaseEco.xlsx com o export novo do HugMe.
+   - Copie a partir da linha do cabeçalho (a que começa com "Id HugMe"), sem as 3 linhas de título do HugMe.
+   - Cole na célula A1 com Colar especial > Valores e salve com o mesmo nome.
+   - Ou mande o export para o Claude, que ele prepara e salva na pasta.
+Passo 2. Pedir ao Claude, na conversa do app que tem acesso a esta pasta: "classifica os casos novos do RA".
+   - Ele lê só as reclamações que ainda não estão no Classificacao_Motivos_RA.xlsx, classifica e salva o arquivo na pasta.
+   - Se quiser, peça junto: "e atualiza o estudo".
+   - Feche o Excel antes: arquivo aberto não pode ser substituído.
+Passo 3. Rodar o Atualizar RA.bat.
+
+Se pular o passo 2, o dash funciona, mas as reclamações novas aparecem como "Aguardando classificação".
+
+4. COMO O CLAUDE CLASSIFICA (RÉGUA DE 13/11/2026)
+- Cada reclamação recebe 1 categoria e 1 subcategoria: o problema real do cliente. Outro problema citado entra como categoria secundária.
+- Lê só o título e o texto. Não usa as tags da operação.
+- Cancelamento só quando o obstáculo é o próprio processo de cancelar (canal que não deixa, pedido que ninguém concluiu).
+- Quer cancelar por causa de um problema, ou cancelamento travado por débito ou multa: a categoria é o problema (em geral Financeiro) e Cancelamento fica como secundária.
+- Já cancelou e continua sendo cobrado: Financeiro > Cobrança indevida após o cancelamento.
+- Retirada do aparelho não feita: Campo > Visita não cumprida (ou Data distante), serviço Retirada.
+- Campo é só falha da área técnica. Erro de sistema ou de cadastro vai para Processo e sistemas.
+- A coluna "Já tinha cancelado?" marca quem já tinha cancelado o contrato quando reclamou.
+A lista completa de categorias e subcategorias está na aba Taxonomia do Classificacao_Motivos_RA.xlsx.
+Essas regras ficam salvas no Claude com o nome "classificacao-motivos-ra", para a classificação sair igual toda semana.
+
+5. CUIDADOS
+- Não renomear os arquivos. Se o Windows baixar algo como "RA-1.py", o dash não lê.
+- Não apagar linhas do Classificacao_Motivos_RA.xlsx.
+- A pasta "Claude outputs" pode reaparecer quando o Claude envia arquivos. Ela não sobe para o GitHub.
+- Mudança de régua: avisar o Claude. Ele relê os casos afetados e atualiza a regra salva.
+
+6. O CLAUDE DO EXCEL
+Ele também consegue classificar, mas trabalha só na planilha aberta e devolve o arquivo para baixar. Nesse caso é preciso salvar o arquivo por cima do Classificacao_Motivos_RA.xlsx nesta pasta, à mão. Serve como plano B.
