@@ -28,10 +28,12 @@ Passo 3. Rodar o Atualizar RA.bat.
 
 Se pular o passo 2, o dash funciona, mas as reclamações novas aparecem como "Aguardando classificação".
 
-4. COMO O CLAUDE CLASSIFICA (RÉGUA DE 13/11/2026)
+4. COMO O CLAUDE CLASSIFICA (RÉGUA DE 16/11/2026)
 - Cada reclamação recebe 1 categoria e 1 subcategoria: o problema real do cliente. Outro problema citado entra como categoria secundária.
 - Lê só o título e o texto. Não usa as tags da operação.
-- Cancelamento só quando o obstáculo é o próprio processo de cancelar (canal que não deixa, pedido que ninguém concluiu).
+- O cancelamento quase sempre é consequência de outro problema, então entra como categoria secundária.
+- Não consegue cancelar porque o canal não atende (telefone, URA, WhatsApp): Atendimento.
+- Cancelamento só é a categoria principal quando o cliente conseguiu pedir e ninguém concluiu, ou quando só pede para cancelar.
 - Quer cancelar por causa de um problema, ou cancelamento travado por débito ou multa: a categoria é o problema (em geral Financeiro) e Cancelamento fica como secundária.
 - Já cancelou e continua sendo cobrado: Financeiro > Cobrança indevida após o cancelamento.
 - Retirada do aparelho não feita: Campo > Visita não cumprida (ou Data distante), serviço Retirada.
