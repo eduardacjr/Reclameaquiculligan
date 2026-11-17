@@ -38,6 +38,7 @@ Se pular o passo 2, o dash funciona, mas as reclamações novas aparecem como "A
 - Já cancelou e continua sendo cobrado: Financeiro > Cobrança indevida após o cancelamento.
 - Retirada do aparelho não feita: Campo > Visita não cumprida (ou Data distante), serviço Retirada.
 - Campo é só falha da área técnica. Erro de sistema ou de cadastro vai para Processo e sistemas.
+- Falta de peça ou de aparelho em estoque, sem previsão de reposição: Supply. Não é culpa do campo. Técnico que veio sem a peça ou não quis trocar continua em Campo.
 - A coluna "Já tinha cancelado?" marca quem já tinha cancelado o contrato quando reclamou.
 A lista completa de categorias e subcategorias está na aba Taxonomia do Classificacao_Motivos_RA.xlsx.
 Essas regras ficam salvas no Claude com o nome "classificacao-motivos-ra", para a classificação sair igual toda semana.

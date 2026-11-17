@@ -503,9 +503,9 @@ def renderizar_painel_principal(df_painel, titulo_secao):
 # atualizado toda semana com os casos novos. O dash cruza pelo Id HugMe.
 ARQ_CLASSIFICACAO = 'Classificacao_Motivos_RA.xlsx'
 AGUARDANDO = 'Aguardando classificação'
-ORDEM_CATEGORIAS = ['Cancelamento', 'Financeiro', 'Campo', 'Processo e sistemas', 'Atendimento', 'Produto', 'Comercial', 'Outros']
+ORDEM_CATEGORIAS = ['Cancelamento', 'Financeiro', 'Campo', 'Supply', 'Processo e sistemas', 'Atendimento', 'Produto', 'Comercial', 'Outros']
 # cor fixa por categoria (não muda com filtro); "aguardando" fica em cinza
-COR_CATEGORIA = {'Cancelamento': '#2a78d6', 'Financeiro': '#eb6834', 'Campo': '#1baf7a', 'Processo e sistemas': '#eda100',
+COR_CATEGORIA = {'Cancelamento': '#2a78d6', 'Financeiro': '#eb6834', 'Campo': '#1baf7a', 'Supply': '#8a5a2b', 'Processo e sistemas': '#eda100',
                  'Atendimento': '#e87ba4', 'Produto': '#008300', 'Comercial': '#6250d6', 'Outros': '#e34948', AGUARDANDO: '#b5b4ad'}
 COLS_CLASSIF = {'Categoria': 'Categoria Motivo', 'Subcategoria': 'Subcategoria Motivo', 'Categoria secundária': 'Categoria Secundária',
                 'Tipo de serviço (campo)': 'Serviço de Campo', 'Motivo de origem (cancelamento)': 'Origem do Cancelamento',
