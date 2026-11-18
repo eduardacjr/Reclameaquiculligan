@@ -22,3 +22,9 @@ Estudo*.xlsx
 
 # Cópias que o app do Claude salva ao baixar arquivos (podem ter a Base Eco)
 Claude outputs/
+
+# Scripts que montam o Estudo Motivos RA (voz.py traz trechos das reclamações)
+Scripts do estudo/
+
+# Cache do Python criado ao rodar o RA.py ou os scripts do estudo
+__pycache__/
